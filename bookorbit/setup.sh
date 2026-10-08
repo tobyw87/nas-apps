@@ -2,10 +2,19 @@
 # Creates .env (random secrets) and data folders. Safe to re-run: an existing .env
 # and data/ are never overwritten. Run with sudo from /volume1/docker/bookorbit.
 cd "$(dirname "$0")" || exit 1
-mkdir -p data/app data/postgres
+mkdir -p data/app data/postgres data/tailscale
 
 if [ -f .env ]; then
   echo "Keeping existing .env"
+  # Upgrade from the port-only install: add Tailscale settings, switch to the HTTPS name.
+  if ! grep -q '^TS_HOSTNAME=' .env; then
+    printf '\n# Tailscale sidecar\nTS_HOSTNAME=bookorbit\nTS_AUTHKEY=\n' >> .env
+    echo "Added Tailscale settings to .env"
+  fi
+  if grep -q '^APP_URL=http://treebeard.taileefdd9.ts.net:3080$' .env; then
+    sed -i 's|^APP_URL=.*|APP_URL=https://bookorbit.taileefdd9.ts.net|' .env
+    echo "APP_URL is now https://bookorbit.taileefdd9.ts.net"
+  fi
 else
   BT=/volume1/docker/books-tools/.env
   PUID=$(sed -n 's/^PUID=//p' "$BT" 2>/dev/null); PGID=$(sed -n 's/^PGID=//p' "$BT" 2>/dev/null)
@@ -29,7 +38,7 @@ if [ ! -d "$LIBRARY_DIR" ]; then
   echo "WARNING: LIBRARY_DIR $LIBRARY_DIR does not exist"
 fi
 if netstat -tln 2>/dev/null | grep -q ":$APP_PORT "; then
-  if ! docker ps --format '{{.Names}}' | grep -q '^bookorbit-app$'; then
+  if ! docker ps --format '{{.Names}}' | grep -q '^bookorbit-'; then
     echo "WARNING: port $APP_PORT is already in use. Change APP_PORT and APP_URL in .env."
   fi
 fi

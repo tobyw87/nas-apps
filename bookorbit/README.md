@@ -16,7 +16,8 @@ integration. Audiobooks stay in Audiobookshelf.
 | BookOrbit data (covers, cache) | `data/app` |
 | Database (Postgres + pgvector) | `data/postgres` |
 | Library (at `/books`, writable) | `/volume1/NAS/Archive/5_Books/Library` |
-| Web UI / OPDS | `http://treebeard.taileefdd9.ts.net:3080` (over Tailscale) |
+| Web UI / OPDS | `https://bookorbit.taileefdd9.ts.net` (own Tailscale name, HTTPS) |
+| Tailscale sidecar state | `data/tailscale` (keep it, or the node must log in again) |
 
 ## Seedbox stays one-way
 
@@ -28,6 +29,14 @@ and no download client is configured. The only path from Ultra.cc is books-tools
 books-tools copes with BookOrbit's changes: it never re-reads the Library as a source, so an
 edited, renamed or deleted Library file is not copied again from the archive or mirror.
 Leave the `.books-tools` marker file in the Library alone.
+
+## Tailscale
+
+The `tailscale` container joins the tailnet as `bookorbit` and serves BookOrbit over HTTPS
+(`tailscale-serve.json`); the app shares its network. Tailnet-only, no Funnel.
+First start: `sudo docker compose logs tailscale` shows a login link (or set `TS_AUTHKEY` in
+`.env`). In the Tailscale admin console, turn off key expiry for `bookorbit` and make sure
+MagicDNS and HTTPS certificates are on (DNS page). `http://<nas>:3080` still works as a fallback.
 
 ## Commands
 

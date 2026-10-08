@@ -3,6 +3,8 @@
 # BookOrbit may edit, rename and move files in the Library. It has no access to the
 # seedbox: only the Library is mounted, and books-tools is the one-way path down.
 # No Book Dock, download clients, indexers or TTS.
+# A Tailscale sidecar gives it its own tailnet name with HTTPS
+# (https://bookorbit.<tailnet>.ts.net); the app shares the sidecar's network.
 # Settings and secrets live in .env (made by setup.sh, never committed).
 name: bookorbit
 
@@ -13,8 +15,7 @@ services:
     restart: unless-stopped
     init: true
     env_file: .env
-    ports:
-      - "${APP_PORT:-3080}:3000"
+    network_mode: service:tailscale
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -26,6 +27,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      tailscale:
+        condition: service_started
     volumes:
       - "${LIBRARY_DIR:?required}:/books"
       - ./data/app:/data
@@ -43,6 +46,24 @@ services:
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 30s
+
+  tailscale:
+    container_name: bookorbit-ts
+    image: tailscale/tailscale:v1.104.1
+    hostname: ${TS_HOSTNAME:-bookorbit}
+    restart: unless-stopped
+    environment:
+      TS_HOSTNAME: ${TS_HOSTNAME:-bookorbit}
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_SERVE_CONFIG: /config/serve.json
+    ports:
+      # LAN/NAS-IP access too: http://<nas>:3080
+      - "${APP_PORT:-3080}:3000"
+    volumes:
+      - ./data/tailscale:/var/lib/tailscale
+      - ./tailscale-serve.json:/config/serve.json:ro
 
   postgres:
     container_name: bookorbit-db
