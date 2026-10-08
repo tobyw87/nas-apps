@@ -4,7 +4,8 @@
 # seedbox: only the Library is mounted, and books-tools is the one-way path down.
 # No Book Dock, download clients, indexers or TTS.
 # A Tailscale sidecar gives it its own tailnet name with HTTPS
-# (https://bookorbit.<tailnet>.ts.net); the app shares the sidecar's network.
+# (https://bookorbit.<tailnet>.ts.net) and forwards to the app over the compose network,
+# so a Tailscale restart never takes the app down.
 # Settings and secrets live in .env (made by setup.sh, never committed).
 name: bookorbit
 
@@ -15,7 +16,9 @@ services:
     restart: unless-stopped
     init: true
     env_file: .env
-    network_mode: service:tailscale
+    ports:
+      # LAN / NAS-IP fallback: http://<nas>:3080
+      - "${APP_PORT:-3080}:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -27,8 +30,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      tailscale:
-        condition: service_started
     volumes:
       - "${LIBRARY_DIR:?required}:/books"
       - ./data/app:/data
@@ -58,9 +59,6 @@ services:
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "true"
       TS_SERVE_CONFIG: /config/serve.json
-    ports:
-      # LAN/NAS-IP access too: http://<nas>:3080
-      - "${APP_PORT:-3080}:3000"
     volumes:
       - ./data/tailscale:/var/lib/tailscale
       - ./tailscale-serve.json:/config/serve.json:ro

@@ -33,7 +33,7 @@ Leave the `.books-tools` marker file in the Library alone.
 ## Tailscale
 
 The `tailscale` container joins the tailnet as `bookorbit` and serves BookOrbit over HTTPS
-(`tailscale-serve.json`); the app shares its network. Tailnet-only, no Funnel.
+(`tailscale-serve.json`), forwarding to `app:3000` on the compose network. Tailnet-only, no Funnel.
 First start: `sudo docker compose logs tailscale` shows a login link (or set `TS_AUTHKEY` in
 `.env`). In the Tailscale admin console, turn off key expiry for `bookorbit` and make sure
 MagicDNS and HTTPS certificates are on (DNS page). `http://<nas>:3080` still works as a fallback.
