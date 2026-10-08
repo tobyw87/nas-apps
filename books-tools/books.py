@@ -54,6 +54,7 @@ SKIP_DIRS = {"@eaDir", "#recycle", "#snapshot", ".@__thumb"}
 MARKER = ".books-tools"
 UNSORTED = "_Unsorted"
 SPRINGER_DIR = "_Springer Textbooks"
+CONVERT_TIMEOUT = int(os.environ.get("CONVERT_TIMEOUT", "7200"))  # seconds per book
 # Springer download names: Author2017_Chapter_Title.pdf (a chapter), 2015_Bookmatter_Title_2.pdf
 # (index/back pages), 2017_Book_Title.pdf (a whole book). Only whole books go in the Library.
 SPRINGER_PART = re.compile(r"_(Chapter|Bookmatter|Frontmatter|ReferenceWorkEntry)_")
@@ -479,8 +480,15 @@ def do_place(c):
     if c["action"] == "copy":
         shutil.copyfile(c["path"], tmp)
     else:
-        r = subprocess.run(["ebook-convert", str(c["path"]), str(tmp)],
-                           capture_output=True, text=True, timeout=1800)
+        # Huge books (complete collections, big manuals) can take well over 30 min on the NAS.
+        convert = ["ebook-convert", str(c["path"]), str(tmp)]
+        r = subprocess.run(convert, capture_output=True, text=True, timeout=CONVERT_TIMEOUT)
+        if r.returncode != 0 and "SplitError" in (r.stderr + r.stdout):
+            # Calibre couldn't cut an oversized chapter into smaller files; keep it whole.
+            if tmp.exists():
+                tmp.unlink()
+            r = subprocess.run(convert + ["--flow-size", "0"], capture_output=True, text=True,
+                               timeout=CONVERT_TIMEOUT)
         if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
             if tmp.exists():
                 tmp.unlink()

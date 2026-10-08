@@ -37,11 +37,13 @@ Organizes my ebook archive and pulls ebooks one-way from my Ultra.cc seedbox.
 ## Status (Oct 7, 2026)
 - Dry run result: convert 4,679, copy 1,337 (incl. 333 Springer books), skip-part 9,266,
   skip-identical 2,813, skip-duplicate 231, 6 unsorted → ~6,016 books in the library.
-- `organize --apply` started Oct 7 ~8 pm CT, running ~15 books/min.
+- `organize --apply` finished Oct 8 ~3 am CT: 5,996 in Library (4,659 converted, 1,337 copied),
+  20 errors (16 Calibre SplitError, 2 timeouts, 2 corrupt MOBIs; none DRM). Conversion now
+  retries a SplitError with `--flow-size 0` and allows 2 h per book (`CONVERT_TIMEOUT`).
 
 ## Next up
-1. After apply finishes: check report for `error` rows (likely DRM), then schedule
-   `books.sh run` every 6 h in DSM Task Scheduler.
+1. `organize --apply --retry-errors` for the 20, then `cleanup` + `cleanup-apply.sh`, then
+   schedule `books.sh run` every 6 h in DSM Task Scheduler.
 2. ~~Install BookOrbit~~ done Oct 8: `bookorbit/`, https://bookorbit.taileefdd9.ts.net.
    Then run the cleanup above.
 3. Facebook photo export (JSON) → merge into photo archive
