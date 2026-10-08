@@ -15,6 +15,11 @@ if [ -f .env ]; then
     sed -i 's|^APP_URL=.*|APP_URL=https://bookorbit.taileefdd9.ts.net|' .env
     echo "APP_URL is now https://bookorbit.taileefdd9.ts.net"
   fi
+  # Upgrade from Library/Comics mounts: those settings are no longer used (see docker-compose.yml).
+  if grep -qE '^(LIBRARY_DIR|COMICS_DIR)=' .env; then
+    sed -i -E 's/^(LIBRARY_DIR|COMICS_DIR)=/# no longer used: \1=/' .env
+    echo "Commented out LIBRARY_DIR/COMICS_DIR in .env (now EPUB Archive, Textbooks, Manga)"
+  fi
 else
   BT=/volume1/docker/books-tools/.env
   PUID=$(sed -n 's/^PUID=//p' "$BT" 2>/dev/null); PGID=$(sed -n 's/^PGID=//p' "$BT" 2>/dev/null)
@@ -34,9 +39,10 @@ else
 fi
 
 set -a; . ./.env; set +a
-if [ ! -d "$LIBRARY_DIR" ]; then
-  echo "WARNING: LIBRARY_DIR $LIBRARY_DIR does not exist"
-fi
+for d in "${EPUB_DIR:-/volume1/NAS/Archive/5_Books/EPUB Archive}" \
+         "${TEXTBOOKS_DIR:-/volume1/NAS/Archive/5_Books/Textbooks}" "${MANGA_DIR:-/volume1/NAS/Archive/5_Books/Manga}"; do
+  [ -d "$d" ] || echo "WARNING: $d does not exist (run books-tools/migrate.sh first)"
+done
 if netstat -tln 2>/dev/null | grep -q ":$APP_PORT "; then
   if ! docker ps --format '{{.Names}}' | grep -q '^bookorbit-'; then
     echo "WARNING: port $APP_PORT is already in use. Change APP_PORT and APP_URL in .env."

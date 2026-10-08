@@ -1,7 +1,7 @@
-# BookOrbit: browse/read the books-tools Library, Send-to-Kindle, metadata, OPDS.
+# BookOrbit: browse/read 5_Books (EPUB Archive, Textbooks, Manga), Send-to-Kindle, metadata, OPDS.
 # Based on upstream's docker-compose.yml (github.com/bookorbit/bookorbit).
-# BookOrbit may edit, rename and move files in the Library. It has no access to the
-# seedbox: only the Library is mounted, and books-tools is the one-way path down.
+# BookOrbit may edit, rename and move files in these folders. It has no access to the
+# seedbox: only the three folders are mounted, and books-tools is the one-way path down.
 # No Book Dock, download clients, indexers or TTS.
 # A Tailscale sidecar gives it its own tailnet name with HTTPS
 # (https://bookorbit.<tailnet>.ts.net) and forwards to the app over the compose network,
@@ -30,10 +30,11 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - "${LIBRARY_DIR:?required}:/books"
-      # Comics (CBZ/CBR) as their own BookOrbit library, outside 5_Books so the books
-      # cleanup never touches them.
-      - "${COMICS_DIR:-/volume1/NAS/Archive/Comics}:/comics"
+      # One BookOrbit library per folder: EPUB Archive -> /books, Textbooks -> /textbooks,
+      # Manga -> /manga. (books-tools files new books into the first two, `manga` the third.)
+      - "${EPUB_DIR:-/volume1/NAS/Archive/5_Books/EPUB Archive}:/books"
+      - "${TEXTBOOKS_DIR:-/volume1/NAS/Archive/5_Books/Textbooks}:/textbooks"
+      - "${MANGA_DIR:-/volume1/NAS/Archive/5_Books/Manga}:/manga"
       - ./data/app:/data
     read_only: true
     tmpfs:

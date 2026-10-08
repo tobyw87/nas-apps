@@ -11,7 +11,10 @@ services:
       HOME: /data/home
       DATA_DIR: /data
       RCLONE_CONFIG: /data/rclone.conf
+      SEEDBOX_MIRROR_DIR: ${SEEDBOX_MIRROR_DIR:-/volume1/NAS/Archive/_Seedbox_Mirror/Books}
     volumes:
       - ./data:/data
       - "${ARCHIVE_DIR}:${ARCHIVE_DIR}"
+      # what comes down from the seedbox, outside 5_Books
+      - "${SEEDBOX_MIRROR_DIR:-/volume1/NAS/Archive/_Seedbox_Mirror/Books}:${SEEDBOX_MIRROR_DIR:-/volume1/NAS/Archive/_Seedbox_Mirror/Books}"
       - "${LOGS_DIR}:${LOGS_DIR}"

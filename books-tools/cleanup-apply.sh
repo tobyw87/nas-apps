@@ -1,11 +1,17 @@
 #!/bin/sh
-# Carries out a plan written by `books.sh cleanup`. Moves files only; never deletes a file.
-#   sudo /volume1/docker/books-tools/cleanup-apply.sh /volume1/NAS/Logs/books/cleanup-plan-....tsv
-# Afterwards the archive folder holds only the Library and the seedbox mirror; anything else
-# that was left (non-ebooks, emptied folders, @eaDir) goes to <removed_dir>/_leftovers.
+# Carries out a plan written by `books.sh cleanup` or `books.sh manga`. Moves files only; never
+# deletes a file.
+#   sudo /volume1/docker/books-tools/cleanup-apply.sh /volume1/NAS/Logs/books/<plan>.tsv
+# Afterwards each folder the plan sweeps is emptied of whatever is left (non-ebooks, covers,
+# emptied folders, @eaDir) into the holding folder, except the folders it says to keep:
+#   cleanup: 5_Books keeps only EPUB Archive, Textbooks and Manga
+#   manga:   Archive/Comics and Archive/6_Manga are emptied and then removed
 PLAN="$1"
-[ -f "$PLAN" ] || { echo "Usage: $0 <cleanup-plan-....tsv>"; exit 1; }
-head -1 "$PLAN" | grep -q '^# books-tools cleanup plan$' || { echo "Not a cleanup plan: $PLAN"; exit 1; }
+[ -f "$PLAN" ] || { echo "Usage: $0 <plan file>"; exit 1; }
+case "$(head -1 "$PLAN")" in
+  "# books-tools cleanup plan"|"# books-tools manga plan") ;;
+  *) echo "Not a books-tools cleanup or manga plan: $PLAN"; exit 1 ;;
+esac
 # Any books-tools container (organize, pull, a scheduled run) must be finished first.
 RUNNING=$(docker ps -q --filter label=com.docker.compose.project=books-tools) \
   || { echo "Can't check Docker (run with sudo)."; exit 1; }
@@ -14,11 +20,11 @@ if [ -n "$RUNNING" ]; then
 fi
 
 hdr() { sed -n "s/^# $1=//p" "$PLAN"; }
-ARCHIVE=$(hdr archive_dir); LIBRARY=$(hdr library_dir); MIRROR=$(hdr mirror_dir); REMOVED=$(hdr removed_dir)
-for d in "$ARCHIVE" "$LIBRARY" "$MIRROR"; do
-  [ -n "$d" ] && [ -d "$d" ] || { echo "Missing folder from plan header: '$d'"; exit 1; }
-done
+REMOVED=$(hdr removed_dir)
 [ -n "$REMOVED" ] || { echo "Plan has no removed_dir"; exit 1; }
+hdr sweep | while IFS='|' read -r SWEEP TO RM; do
+  [ -d "$SWEEP" ] || { echo "Missing folder from plan: '$SWEEP'"; exit 1; }
+done || exit 1
 
 LOG="${PLAN%.tsv}-moved.tsv"
 TAB=$(printf '\t')
@@ -35,22 +41,35 @@ done < "$PLAN.todo"
 rm -f "$PLAN.todo"
 echo "Moved $moved file(s); $skipped skipped (see $LOG)."
 
-# Everything else directly under the archive except the Library and the mirror -> _leftovers.
-LIBNAME=$(basename "$LIBRARY"); MIRNAME=$(basename "$MIRROR")
-for e in "$ARCHIVE"/* "$ARCHIVE"/.[!.]* "$ARCHIVE"/..?*; do
-  [ -e "$e" ] || continue
-  name=$(basename "$e")
-  [ "$name" = "$LIBNAME" ] || [ "$name" = "$MIRNAME" ] && continue
-  mkdir -p "$REMOVED/_leftovers"
-  if [ -e "$REMOVED/_leftovers/$name" ]; then
-    echo "exists${TAB}$e${TAB}$REMOVED/_leftovers/$name" >> "$LOG"
+# Whatever is left in each swept folder -> holding folder (except the kept folders).
+hdr sweep | while IFS='|' read -r SWEEP TO RM; do
+  for e in "$SWEEP"/* "$SWEEP"/.[!.]* "$SWEEP"/..?*; do
+    [ -e "$e" ] || continue
+    name=$(basename "$e")
+    hdr keep | grep -qxF "$name" && continue
+    mkdir -p "$TO"
+    if [ -e "$TO/$name" ]; then
+      echo "exists${TAB}$e${TAB}$TO/$name" >> "$LOG"
+    else
+      mv -n "$e" "$TO/" && echo "leftover${TAB}$e${TAB}$TO/$name" >> "$LOG"
+    fi
+  done
+  if [ "$RM" = rmdir ]; then
+    rmdir "$SWEEP" 2>/dev/null && echo "Removed the now-empty $SWEEP" || echo "Left $SWEEP (not empty, see $LOG)"
   else
-    mv -n "$e" "$REMOVED/_leftovers/" && echo "leftover${TAB}$e${TAB}$REMOVED/_leftovers/$name" >> "$LOG"
+    echo; echo "$SWEEP now contains:"; ls -la "$SWEEP"
   fi
 done
 
-echo
-echo "$ARCHIVE now contains:"; ls -la "$ARCHIVE"
+# Folders made here belong to root; give them (and moved files) to the books user like the rest.
+REF=$(hdr owner_ref)
+if [ -n "$REF" ] && [ -e "$REF" ]; then
+  OWNER=$(stat -c %u "$REF")
+  hdr fix_owner | while read -r D; do
+    [ -d "$D" ] && find "$D" ! -user "$OWNER" -exec chown --reference="$REF" {} +
+  done
+fi
+
 echo
 echo "Held for you to check, then delete yourself: $REMOVED"
 du -sh "$REMOVED"/* 2>/dev/null

@@ -11,6 +11,8 @@ Commands (run through books.sh on the NAS):
   unpack                   extract .rar/.zip author bundles into _Unpacked/ (archives only read)
   textbooks [--apply PLAN] sort the Library: textbooks (PDF or EPUB) into _Textbooks/, and
                            delete Library copies of PDFs that aren't textbooks (dry run first)
+  manga                    plan moving the manga folders into Manga/<Series>/ (cleanup-apply.sh moves)
+  migrate-db               update remembered paths after migrate.sh (one-time layout change)
   cleanup                  plan moving everything except Library and the mirror out of the
                            archive (writes a plan; cleanup-apply.sh does the moving)
   setup-remote HOST USER   save the seedbox SFTP login (password read from stdin)
@@ -27,6 +29,7 @@ import argparse
 import csv
 import fcntl
 import hashlib
+import json
 import os
 import posixpath
 import re
@@ -42,8 +45,19 @@ from datetime import datetime
 from pathlib import Path
 
 ARCHIVE_DIR = Path(os.environ.get("ARCHIVE_DIR", "/books"))
-LIBRARY_DIR = Path(os.environ.get("LIBRARY_DIR") or ARCHIVE_DIR / "Library")
-MIRROR_DIR = Path(os.environ.get("MIRROR_DIR") or ARCHIVE_DIR / "_Seedbox_Mirror")
+# 5_Books ends up holding only these three folders, each its own BookOrbit library:
+#   EPUB Archive  Author/Title/Title - Author.epub   (the "Library" in this code)
+#   Textbooks     Author/Title/Title - Author.pdf|epub, Springer/ for Springer downloads
+#   Manga         Series/Series v01.cbz              (books.sh manga)
+LIBRARY_DIR = Path(os.environ.get("EPUB_DIR") or ARCHIVE_DIR / "EPUB Archive")
+TEXTBOOKS_DIR = Path(os.environ.get("TEXTBOOKS_DIR") or ARCHIVE_DIR / "Textbooks")
+MANGA_DIR = Path(os.environ.get("MANGA_DIR") or ARCHIVE_DIR / "Manga")
+# What comes down from the seedbox, kept outside 5_Books (the pull compares against it).
+MIRROR_DIR = Path(os.environ.get("SEEDBOX_MIRROR_DIR") or ARCHIVE_DIR.parent / "_Seedbox_Mirror" / "Books")
+# Before the Oct 2026 layout change (migrate.sh moves them):
+OLD_LIBRARY_DIR = ARCHIVE_DIR / "Library"
+OLD_MIRROR_DIR = ARCHIVE_DIR / "_Seedbox_Mirror"
+KEEP_DIRS = [LIBRARY_DIR, TEXTBOOKS_DIR, MANGA_DIR, MIRROR_DIR]   # never read as sources
 LOGS_DIR = Path(os.environ.get("LOGS_DIR", "/data/logs"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 SEEDBOX_PATH = os.environ.get("SEEDBOX_PATH", "/home/mynock42/media/ABS")
@@ -66,10 +80,9 @@ LATER_RAR_PART = re.compile(r"\.part0*([2-9]\d*|1\d+)\.rar$", re.I)   # unar rea
 SKIP_DIRS = {"@eaDir", "#recycle", "#snapshot", ".@__thumb"}
 MARKER = ".books-tools"
 UNSORTED = "_Unsorted"
-# Textbooks (PDF or EPUB) live in Library/_Textbooks, their own BookOrbit library.
-# PDFs that aren't textbooks are not kept in the Library at all.
-TEXTBOOK_DIR = "_Textbooks"
-SPRINGER_DIR = TEXTBOOK_DIR + "/Springer"
+# Textbooks (PDF or EPUB) live in TEXTBOOKS_DIR. PDFs that aren't textbooks are not kept.
+SPRINGER_DIR = "Springer"                 # TEXTBOOKS_DIR/Springer: Springer downloads
+OLD_TEXTBOOK_DIRS = ("_Springer Textbooks", "_Textbooks")   # older places inside the Library
 OLD_SPRINGER_DIR = "_Springer Textbooks"
 CONVERT_TIMEOUT = int(os.environ.get("CONVERT_TIMEOUT", "7200"))  # seconds per book
 # Springer download names: Author2017_Chapter_Title.pdf (a chapter), 2015_Bookmatter_Title_2.pdf
@@ -190,7 +203,7 @@ def epub_meta(path):
         return None, None
     titles = [t.text for t in md.iter(DC + "title") if t.text and t.text.strip()]
     roles = {}
-    for m in md.iter("{*}meta"):
+    for m in md.findall(".//{*}meta"):
         if m.get("property") == "role" and m.get("refines"):
             roles[m.get("refines").lstrip("#")] = (m.text or "").strip()
     creators = []
@@ -259,7 +272,7 @@ def textbook_reason(path, ext, title=None, publisher=None, tags=None, source=Non
             return "Springer book file name"
         if ISBN_NAME.search(p.name):
             return "ISBN in file name"
-        if OLD_SPRINGER_DIR in p.parts or TEXTBOOK_DIR in p.parts:
+        if OLD_SPRINGER_DIR in p.parts or TEXTBOOKS_DIR in p.parents:
             return "already filed as a textbook"
         for d in p.parent.parts:
             if TEXTBOOK_FOLDER.search(d):
@@ -347,24 +360,33 @@ def book_key(author, title, sha):
 def index_library(db):
     """Record what is already in the Library (first run, or after the database was reset)."""
     n = 0
-    for path, ext in walk_books(LIBRARY_DIR):
-        if db.execute("SELECT 1 FROM library WHERE path=?", (str(path),)).fetchone():
+    for root in (LIBRARY_DIR, TEXTBOOKS_DIR):
+        if not root.exists():
             continue
-        sha = sha256(path)
-        if UNSORTED in path.relative_to(LIBRARY_DIR).parts[:1]:
-            author = title = None
-        else:
-            author, title, _ = read_meta(path, ext)
-        db.execute("INSERT OR REPLACE INTO library VALUES (?,?,?,?,?)",
-                   (str(path), book_key(author, title, sha), ext, sha, "existing"))
-        if author:
-            akey = norm(author)
-            folder = path.relative_to(LIBRARY_DIR).parts[0]
-            db.execute("INSERT OR IGNORE INTO authors VALUES (?,?)", (akey, folder))
-        n += 1
+        for path, ext in walk_books(root):
+            if db.execute("SELECT 1 FROM library WHERE path=?", (str(path),)).fetchone():
+                continue
+            sha = sha256(path)
+            first = path.relative_to(root).parts[0]
+            if first in (UNSORTED, SPRINGER_DIR, UNCONVERTED):
+                author = title = None
+            else:
+                author, title, _ = read_meta(path, ext)
+            db.execute("INSERT OR REPLACE INTO library VALUES (?,?,?,?,?)",
+                       (str(path), book_key(author, title, sha), ext, sha, "existing"))
+            if author:
+                db.execute("INSERT OR IGNORE INTO authors VALUES (?,?)", (norm(author), first))
+            n += 1
     db.commit()
     if n:
         log(f"Indexed {n} file(s) already in the Library")
+
+
+def require_new_layout():
+    """Stop until migrate.sh has moved Library -> EPUB Archive and the mirror out of 5_Books."""
+    if OLD_LIBRARY_DIR.exists() or OLD_MIRROR_DIR.exists():
+        sys.exit(f"STOP: {OLD_LIBRARY_DIR.name} or {OLD_MIRROR_DIR.name} is still in {ARCHIVE_DIR}.\n"
+                 f"Run  sudo /volume1/docker/books-tools/migrate.sh  first (moves them, instantly).")
 
 
 def check_library_folder():
@@ -376,6 +398,7 @@ def check_library_folder():
 # ---------------------------------------------------------------- organize
 
 def organize(apply, retry_errors=False):
+    require_new_layout()
     check_library_folder()
     db = db_open()
     if apply:
@@ -384,7 +407,7 @@ def organize(apply, retry_errors=False):
     if LIBRARY_DIR.exists():
         index_library(db)
 
-    sources = [(ARCHIVE_DIR, [LIBRARY_DIR, MIRROR_DIR])]
+    sources = [(ARCHIVE_DIR, KEEP_DIRS)]
     if MIRROR_DIR.exists():
         sources.append((MIRROR_DIR, []))
 
@@ -539,10 +562,10 @@ def organize(apply, retry_errors=False):
                             str(c.get("dest") or ""), c.get("note", "")])
         log(f"Report: {report}")
     unsorted = sum(1 for c in plan if c.get("dest") and UNSORTED in Path(c["dest"]).parts)
-    textbooks = sum(1 for c in plan if c.get("dest") and TEXTBOOK_DIR in Path(c["dest"]).parts)
+    textbooks = sum(1 for c in plan if c.get("dest") and TEXTBOOKS_DIR in Path(c["dest"]).parents)
     summary = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "nothing new"
     log(f"{'Done' if apply else 'Dry run (nothing changed)'} - {summary}"
-        + (f"; {textbooks} textbooks go to {TEXTBOOK_DIR}" if textbooks else "")
+        + (f"; {textbooks} textbooks go to {TEXTBOOKS_DIR.name}" if textbooks else "")
         + (f"; {unsorted} go to {UNSORTED} (no usable author/title)" if unsorted else ""))
     return counts
 
@@ -560,13 +583,13 @@ def best_spelling(names):
 
 def dest_for(c, authors, taken):
     ext = "pdf" if c["ext"] == "pdf" else "epub"
-    base = LIBRARY_DIR / TEXTBOOK_DIR if c.get("textbook") else LIBRARY_DIR
+    base = TEXTBOOKS_DIR if c.get("textbook") else LIBRARY_DIR
     if not (c["author"] and c["title"]):
         folder = base / UNSORTED
         name = safe(c["path"].stem, 150)
         m = SPRINGER_BOOK.match(c["path"].stem)
         if m:
-            folder = LIBRARY_DIR / SPRINGER_DIR
+            folder = TEXTBOOKS_DIR / SPRINGER_DIR
             words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", m.group(2).replace("_", " "))
             name = safe(f"{words} ({m.group(1)})", 150)
         cand = folder / f"{name}.{ext}"
@@ -639,6 +662,7 @@ def rclone(*args, **kw):
 
 
 def pull():
+    require_new_layout()
     if not Path(RCLONE_CONFIG).exists():
         sys.exit("No seedbox login saved yet. Run: sudo ./setup-seedbox.sh")
     remote = f"{RCLONE_REMOTE}:{SEEDBOX_PATH}"
@@ -688,7 +712,7 @@ def setup_remote(host, user):
 def status():
     db = db_open()
     lib = db.execute("SELECT COUNT(*) FROM library").fetchone()[0]
-    log(f"Library: {lib} file(s) in {LIBRARY_DIR}")
+    log(f"Library: {lib} file(s) in {LIBRARY_DIR} and {TEXTBOOKS_DIR}")
     for r in db.execute("SELECT COALESCE(status,'read, not yet placed') s, COUNT(*) n FROM files GROUP BY s"):
         log(f"  {r['s']}: {r['n']}")
     errs = db.execute("SELECT path, note FROM files WHERE status='error' LIMIT 20").fetchall()
@@ -706,7 +730,7 @@ def unpack():
     db = db_open()
     db.execute("""CREATE TABLE IF NOT EXISTS archives (
                     path TEXT PRIMARY KEY, size INTEGER, mtime REAL, status TEXT, note TEXT)""")
-    skip = {LIBRARY_DIR.resolve(), MIRROR_DIR.resolve()}
+    skip = {d.resolve() for d in KEEP_DIRS}
     counts = {}
     for _ in range(3):
         done_this_pass = 0
@@ -758,7 +782,7 @@ SPRINGER_CHAPTER = re.compile(r"_Chapter_")
 
 
 def cleanup():
-    """Plan the archive cleanup: after it, ARCHIVE_DIR holds only the Library and the mirror.
+    """Plan the archive cleanup: after it, 5_Books holds only EPUB Archive, Textbooks and Manga.
 
     Nothing is moved here. This writes a plan for cleanup-apply.sh, which moves files on the
     NAS itself (same volume, so instant). Every file goes somewhere; none is deleted.
@@ -769,11 +793,13 @@ def cleanup():
       failed to convert (usually DRM)               -> Library/_Unconverted (the only copy)
       Library copy missing, or the kept copy failed -> REMOVED_DIR/_review
       anything else left (non-ebooks, folders)      -> REMOVED_DIR/_leftovers (by the apply script)
+    Manga comes in through `manga`, not here.
     """
+    require_new_layout()
     db = db_open()
     rows = {r["path"]: r for r in db.execute("SELECT path, size, mtime, status, dest, note FROM files")}
     plan, unprocessed, unsafe = [], [], []
-    for path, ext in walk_books(ARCHIVE_DIR, [LIBRARY_DIR, MIRROR_DIR]):
+    for path, ext in walk_books(ARCHIVE_DIR, KEEP_DIRS):
         r = rows.get(str(path))
         st = path.stat()
         if (r is None or not r["status"] or r["size"] != st.st_size
@@ -813,7 +839,7 @@ def cleanup():
     leftovers = {}
     for dirpath, dirnames, filenames in os.walk(ARCHIVE_DIR):
         dp = Path(dirpath)
-        dirnames[:] = [d for d in dirnames if (dp / d).resolve() not in (LIBRARY_DIR.resolve(), MIRROR_DIR.resolve())
+        dirnames[:] = [d for d in dirnames if (dp / d).resolve() not in {k.resolve() for k in KEEP_DIRS}
                        and d not in SKIP_DIRS]
         for fn in filenames:
             p = dp / fn
@@ -858,9 +884,13 @@ def cleanup():
     plan_file = LOGS_DIR / f"cleanup-plan-{stamp}.tsv"
     with open(plan_file, "w", encoding="utf-8") as f:
         f.write("# books-tools cleanup plan\n")
-        for key, val in (("archive_dir", ARCHIVE_DIR), ("library_dir", LIBRARY_DIR),
-                         ("mirror_dir", MIRROR_DIR), ("removed_dir", REMOVED_DIR)):
-            f.write(f"# {key}={val}\n")
+        f.write(f"# removed_dir={REMOVED_DIR}\n")
+        # afterwards, everything else in 5_Books except the three library folders -> _leftovers
+        f.write(f"# sweep={ARCHIVE_DIR}|{REMOVED_DIR / '_leftovers'}\n")
+        for d in KEEP_DIRS:
+            if d.parent == ARCHIVE_DIR:
+                f.write(f"# keep={d.name}\n")
+        f.write(f"# owner_ref={LIBRARY_DIR}\n# fix_owner={LIBRARY_DIR / UNCONVERTED}\n")
         for action, src, dest, _ in plan:
             f.write(f"{action}\t{src}\t{dest}\n")
     log(f"Plan: {plan_file}")
@@ -871,15 +901,18 @@ def cleanup():
 # ---------------------------------------------------------------- textbooks
 
 def textbook_dest(path):
+    """Where a Library (EPUB Archive) file goes when it's a textbook: same Author/Title path."""
     rel = path.relative_to(LIBRARY_DIR)
     if rel.parts[0] == OLD_SPRINGER_DIR:
-        return LIBRARY_DIR / SPRINGER_DIR / Path(*rel.parts[1:])
-    return LIBRARY_DIR / TEXTBOOK_DIR / rel
+        return TEXTBOOKS_DIR / SPRINGER_DIR / Path(*rel.parts[1:])
+    if rel.parts[0] in OLD_TEXTBOOK_DIRS:
+        return TEXTBOOKS_DIR / Path(*rel.parts[1:])
+    return TEXTBOOKS_DIR / rel
 
 
-def prune_empty(d):
-    """Remove now-empty folders from d up to (not including) the Library."""
-    while d != LIBRARY_DIR and LIBRARY_DIR in d.parents:
+def prune_empty(d, root):
+    """Remove now-empty folders from d up to (not including) root."""
+    while d != root and root in d.parents:
         try:
             names = [n for n in os.listdir(d) if n != "@eaDir"]
             if names:
@@ -893,18 +926,19 @@ def prune_empty(d):
 
 
 def textbooks(plan_file=None):
-    """Sort what's already in the Library. Dry run: write a plan to review (and edit).
-      textbook (PDF or EPUB)  -> moved to Library/_Textbooks/<same Author/Title path>
-      PDF, not a textbook     -> Library copy deleted (its original stays in the archive;
+    """Sort what's already in the EPUB Archive. Dry run: write a plan to review (and edit).
+      textbook (PDF or EPUB)  -> moved to Textbooks/<same Author/Title path>
+      PDF, not a textbook     -> deleted (its original stays in the archive;
                                  cleanup then holds it in REMOVED_DIR/non-textbook-pdfs)
     """
+    require_new_layout()
     db = db_open()
     if plan_file:
         return textbooks_apply(db, Path(plan_file))
     source_of = {r["path"]: r["source"] for r in db.execute("SELECT path, source FROM library")}
     plan = []
     n = 0
-    for path, ext in walk_books(LIBRARY_DIR, [LIBRARY_DIR / UNCONVERTED, LIBRARY_DIR / TEXTBOOK_DIR]):
+    for path, ext in walk_books(LIBRARY_DIR, [LIBRARY_DIR / UNCONVERTED]):
         rel = path.relative_to(LIBRARY_DIR)
         src = source_of.get(str(path))
         src = src if src and src != "existing" else None
@@ -919,18 +953,18 @@ def textbooks(plan_file=None):
             plan.append(("remove", path, "PDF, not a textbook"))
         n += 1
         if n % 500 == 0:
-            log(f"Checked {n} Library file(s)...")
+            log(f"Checked {n} file(s)...")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     out = LOGS_DIR / f"textbooks-plan-{stamp}.tsv"
     with open(out, "w", encoding="utf-8") as f:
         f.write("# books-tools textbooks plan\n")
         f.write("# action<TAB>file<TAB>why. Edit before applying: delete a line to leave that file alone,\n")
-        f.write("# or change remove <-> textbook. textbook = move to _Textbooks; remove = delete (PDFs only).\n")
+        f.write("# or change remove <-> textbook. textbook = move to Textbooks; remove = delete (PDFs only).\n")
         for action, path, reason in sorted(plan, key=lambda x: (x[0], str(x[1]))):
             f.write(f"{action}\t{path}\t{reason}\n")
     tb = [p for a, p, _ in plan if a == "textbook"]
-    log(f"Checked {n} Library file(s): {len(tb)} textbook(s) to move to {TEXTBOOK_DIR} "
+    log(f"Checked {n} file(s): {len(tb)} textbook(s) to move to {TEXTBOOKS_DIR.name} "
         f"({sum(1 for p in tb if p.suffix.lower() == '.epub')} EPUB, "
         f"{sum(1 for p in tb if p.suffix.lower() == '.pdf')} PDF); "
         f"{sum(1 for a, _, _ in plan if a == 'remove')} non-textbook PDF(s) to delete")
@@ -954,13 +988,15 @@ def textbooks_apply(db, plan_file):
             action, _, rest = line.partition("\t")
             path = Path(rest.partition("\t")[0])
             action = action.strip()
-            result = "skipped"
+            # plans written before migrate.sh name Library/..., which is EPUB Archive/... now
+            if OLD_LIBRARY_DIR == path or OLD_LIBRARY_DIR in path.parents:
+                path = LIBRARY_DIR / path.relative_to(OLD_LIBRARY_DIR)
             try:
                 rel = path.relative_to(LIBRARY_DIR)
             except ValueError:
                 rel = None
-            if rel is None or rel.parts[0] in (TEXTBOOK_DIR, UNCONVERTED):
-                result = "skipped: not a Library file to sort"
+            if rel is None or not rel.parts or rel.parts[0] == UNCONVERTED:
+                result = "skipped: not an EPUB Archive file to sort"
             elif not path.exists():
                 result = "skipped: file is gone"
             elif action == "textbook":
@@ -972,7 +1008,7 @@ def textbooks_apply(db, plan_file):
                     os.rename(path, dest)
                     db.execute("UPDATE OR REPLACE library SET path=? WHERE path=?", (str(dest), str(path)))
                     db.execute("UPDATE files SET dest=? WHERE dest=?", (str(dest), str(path)))
-                    prune_empty(path.parent)
+                    prune_empty(path.parent, LIBRARY_DIR)
                     result = f"moved to {dest}"
             elif action == "remove":
                 if path.suffix.lower() != ".pdf":
@@ -983,7 +1019,7 @@ def textbooks_apply(db, plan_file):
                     db.execute("""UPDATE files SET status='skip-pdf', dest='',
                                   note='PDF that isn''t a textbook - removed from the Library'
                                   WHERE dest=? AND status IN ('copy','convert')""", (str(path),))
-                    prune_empty(path.parent)
+                    prune_empty(path.parent, LIBRARY_DIR)
                     result = "deleted"
             else:
                 result = f"skipped: unknown action '{action}'"
@@ -993,11 +1029,304 @@ def textbooks_apply(db, plan_file):
             if sum(counts.values()) % 250 == 0:
                 db.commit()
     db.commit()
+    for name in OLD_TEXTBOOK_DIRS:
+        if (LIBRARY_DIR / name).is_dir():
+            for dp, _, _ in sorted(os.walk(LIBRARY_DIR / name), key=lambda x: -len(x[0])):
+                prune_empty(Path(dp), LIBRARY_DIR)
     log("Done - " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
     log(f"Log: {done_log}")
-    old = LIBRARY_DIR / OLD_SPRINGER_DIR
-    if old.is_dir():
-        prune_empty(old)
+
+
+# ---------------------------------------------------------------- layout migration
+
+def migrate_db():
+    """After migrate.sh moved Library -> EPUB Archive and the mirror out of 5_Books:
+    rewrite the paths state.db remembers. Safe to run again."""
+    if OLD_LIBRARY_DIR.exists() or not LIBRARY_DIR.exists():
+        sys.exit(f"STOP: expected {LIBRARY_DIR} and no {OLD_LIBRARY_DIR}; run migrate.sh, not this.")
+    db = db_open()
+    for old, new in ((OLD_LIBRARY_DIR, LIBRARY_DIR), (OLD_MIRROR_DIR, MIRROR_DIR)):
+        o, n = str(old) + "/", str(new) + "/"
+        total = 0
+        for table, col in (("files", "path"), ("files", "dest"), ("library", "path"), ("library", "source")):
+            total += db.execute(f"UPDATE {table} SET {col} = ? || substr({col}, ?) WHERE substr({col}, 1, ?) = ?",
+                                (n, len(o) + 1, len(o), o)).rowcount
+        db.execute("UPDATE files SET note = replace(note, ?, ?) WHERE instr(note, ?) > 0", (o, n, o))
+        log(f"{old} -> {new}: {total} remembered path(s) updated")
+    db.commit()
+
+
+# ---------------------------------------------------------------- manga
+
+COMIC_EXTS = {"cbz", "cbr", "cb7", "cbt"}
+PACKED_EXTS = {"zip": "cbz", "rar": "cbr", "7z": "cb7"}   # image-only archives get the comic extension
+MANGA_EXTS = COMIC_EXTS | set(PACKED_EXTS) | {"pdf", "epub"}
+IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "avif", "bmp"}
+MANGA_REMOVED_DIR = Path(os.environ.get("MANGA_REMOVED_DIR") or ARCHIVE_DIR.parent / "_Manga_removed")
+CHECK_DIR = "_To check"
+VOL_RE = re.compile(r"(?:^|[\s.\-])(?:v|vol\.?|volume|tome)\s*(\d{1,4}(?:\.\d+)?)(?!\d)", re.I)
+CH_RE = re.compile(r"(?:^|[\s.\-])(?:c|ch\.?|chap\.?|chapter)\s*(\d{1,4}(?:\.\d+)?)(?!\d)", re.I)
+TRAILING_NUM_RE = re.compile(r"^(.*?\D)\s*#?(\d{1,4}(?:\.\d+)?)$")
+
+
+def manga_sources():
+    return [Path(p) for p in os.environ.get("MANGA_SOURCES", "").split(":") if p]
+
+
+def parse_manga_name(stem):
+    """'Berserk v36 (2012) (Digital) (danke-Empire) - Unknown' -> ('Berserk', 'v', '36')."""
+    s = re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", " ", stem).replace("_", " ")
+    s = re.sub(r"\s+", " ", s).strip(" -.")
+    for kind, rx in (("v", VOL_RE), ("c", CH_RE)):
+        m = rx.search(s)
+        if m:
+            return s[:m.start()].strip(" -.,#") or None, kind, m.group(1)
+    first = s.split(" - ")[0].strip()
+    m = TRAILING_NUM_RE.match(first)
+    if m:
+        return m.group(1).strip(" -.,#") or None, "v", m.group(2)
+    return first or None, None, None
+
+
+def comicinfo(path):
+    """Series and number from ComicInfo.xml inside a CBZ."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            name = next((n for n in z.namelist() if n.lower().rsplit("/", 1)[-1] == "comicinfo.xml"), None)
+            if not name:
+                return None, None
+            x = ET.fromstring(z.read(name))
+    except Exception:
+        return None, None
+    series = (x.findtext("Series") or "").strip() or None
+    num = (x.findtext("Number") or "").strip()
+    vol = (x.findtext("Volume") or "").strip()
+    if not num and vol.isdigit() and int(vol) < 1000:   # western comics put the year in Volume
+        num = vol
+    return series, (num if re.fullmatch(r"\d{1,4}(?:\.\d+)?", num) else None)
+
+
+def opf_series(opf_bytes):
+    """calibre:series / series_index (calibre's metadata.opf, or an EPUB's own OPF)."""
+    try:
+        md = ET.fromstring(opf_bytes).find("{*}metadata")
+    except Exception:
+        return None, None
+    if md is None:
+        return None, None
+    meta = {m.get("name"): m.get("content") for m in md.findall(".//{*}meta") if m.get("name")}
+    series = (meta.get("calibre:series") or "").strip() or None
+    idx = (meta.get("calibre:series_index") or "").strip()
+    if not series:
+        for m in md.findall(".//{*}meta"):
+            if m.get("property") == "belongs-to-collection" and (m.text or "").strip():
+                series = m.text.strip()
+                break
+    try:
+        idx = f"{float(idx):g}" if idx else None
+    except ValueError:
+        idx = None
+    return series, idx
+
+
+def archive_is_images(path, ext):
+    """True if a .zip/.rar/.7z holds only page images (so it's really a CBZ/CBR/CB7)."""
+    try:
+        if ext == "zip":
+            with zipfile.ZipFile(path) as z:
+                names = [n for n in z.namelist() if not n.endswith("/")]
+        else:
+            r = subprocess.run(["lsar", "-j", str(path)], capture_output=True, text=True, timeout=300)
+            names = [e.get("XADFileName", "") for e in json.loads(r.stdout).get("lsarContents", [])
+                     if not e.get("XADIsDirectory")]
+    except Exception:
+        return False
+    pages = [n for n in names if n.rsplit(".", 1)[-1].lower() in IMAGE_EXTS]
+    others = [n for n in names if n.rsplit(".", 1)[-1].lower() not in IMAGE_EXTS
+              and n.rsplit("/", 1)[-1].lower() not in ("comicinfo.xml", "thumbs.db", ".ds_store")
+              and n.rsplit(".", 1)[-1].lower() not in ("txt", "nfo", "xml", "url")]
+    return bool(pages) and not others
+
+
+def manga_info(path, ext):
+    """(series, kind, number, where the series came from) for one file."""
+    series = num = None
+    how = ""
+    if ext == "cbz" or ext == "zip":
+        series, num = comicinfo(path)
+        how = "ComicInfo" if series else ""
+    if not series:
+        opf = path.parent / "metadata.opf"   # calibre library folder: one book per folder
+        try:
+            if opf.exists() and sum(1 for p in path.parent.iterdir()
+                                    if p.suffix.lower().lstrip(".") in MANGA_EXTS) == 1:
+                series, idx = opf_series(opf.read_bytes())
+                num = num or idx
+                how = "calibre metadata" if series else ""
+            elif ext == "epub":
+                with zipfile.ZipFile(path) as z:
+                    root = ET.fromstring(z.read("META-INF/container.xml")).find(".//{*}rootfile").get("full-path")
+                    series, idx = opf_series(z.read(root))
+                num = num or idx
+                how = "EPUB metadata" if series else ""
+        except Exception:
+            pass
+    fs, kind, fnum = parse_manga_name(path.stem)
+    if not series:
+        series, how = fs, "file name"
+    if num is None:
+        num = fnum
+    else:
+        kind = kind if fnum and float(fnum) == float(num) else "v"
+    return clean_text(series) if series else None, (kind or "v") if num else None, num, how
+
+
+def manga_label(kind, num):
+    f = float(num)
+    if f.is_integer():
+        return f"{kind}{int(f):0{3 if kind == 'c' or f >= 100 else 2}d}"
+    whole, frac = f"{f:g}".split(".")
+    return f"{kind}{int(whole):0{3 if kind == 'c' else 2}d}.{frac}"
+
+
+def manga():
+    """Plan moving everything in the manga source folders (Archive/Comics, Archive/6_Manga) into
+    5_Books/Manga/<Series>/<Series> v01.cbz without duplicates. Nothing is moved here; the plan
+    is carried out on the NAS by cleanup-apply.sh (moves only, same volume).
+      a volume/chapter -> Manga/<Series>/<Series> v01.<ext>   (one copy: comic archive over
+                          PDF/EPUB, then the larger file; the rest -> MANGA_REMOVED_DIR/duplicates)
+      no number        -> Manga/<Series>/<name>.<ext>        (identical copies held back)
+      no series        -> Manga/_Unsorted/<name>
+      odd archives, folders of loose page images -> Manga/_To check/
+      everything else left in the sources (covers, metadata.opf, empty folders)
+                       -> MANGA_REMOVED_DIR/_leftovers/<source>, then the source folder goes
+    """
+    sources = [d for d in manga_sources() if d.is_dir()]
+    if not sources:
+        sys.exit("No manga source folders found (MANGA_SOURCES). Run it through books.sh.")
+    items = []
+    unsure = []          # (path, dest-under-CHECK_DIR, note)
+    for root, existing in [(d, False) for d in sources] + [(MANGA_DIR, True)]:
+        if not root.exists():
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            dp = Path(dirpath)
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not d.startswith("."))
+            exts = [fn.rsplit(".", 1)[-1].lower() if "." in fn else "" for fn in filenames]
+            if not existing and dp != root and not any(e in MANGA_EXTS for e in exts) \
+                    and sum(e in IMAGE_EXTS for e in exts) >= 3 and not dirnames:
+                unsure.append((dp, dp.relative_to(root), "folder of loose page images"))
+                continue
+            for fn, ext in zip(sorted(filenames), [fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
+                                                   for fn in sorted(filenames)]):
+                if fn.startswith(".") or ext not in MANGA_EXTS:
+                    continue
+                path = dp / fn
+                if existing and CHECK_DIR in path.relative_to(root).parts[:1]:
+                    continue
+                out_ext = ext
+                if ext in PACKED_EXTS:
+                    if existing or not archive_is_images(path, ext):
+                        if not existing:
+                            unsure.append((path, path.relative_to(root), f".{ext} that isn't just page images"))
+                        continue
+                    out_ext = PACKED_EXTS[ext]
+                series, kind, num, how = manga_info(path, ext)
+                items.append(dict(path=path, ext=out_ext, size=path.stat().st_size, series=series,
+                                  kind=kind, num=num, how=how, existing=existing, root=root))
+        log(f"Read {root}")
+
+    # one spelling per series ("Berserk", not "berserk")
+    names = {}
+    for it in items:
+        if it["series"]:
+            names.setdefault(norm(it["series"]) or it["series"].casefold(), []).append(it["series"])
+    display = {k: safe(best_spelling(v), 120) for k, v in names.items()}
+
+    # identical files: only files of equal size can be identical, so only those are hashed
+    by_size = {}
+    for it in items:
+        by_size.setdefault(it["size"], []).append(it)
+    for same in by_size.values():
+        if len(same) > 1:
+            for it in same:
+                it["sha"] = sha256(it["path"])
+
+    groups = {}
+    for it in items:
+        skey = norm(it["series"]) or (it["series"] or "").casefold() if it["series"] else None
+        if skey and it["num"]:
+            key = (skey, it["kind"], float(it["num"]))
+        else:
+            key = ("one", skey, it.get("sha") or str(it["path"]))   # no number: only identical files merge
+        it["skey"] = skey
+        groups.setdefault(key, []).append(it)
+
+    plan = []        # (action, src, dest, series, label, note)
+    taken = {str(p).casefold() for p in (MANGA_DIR.rglob("*") if MANGA_DIR.exists() else [])}
+    for key, group in sorted(groups.items(), key=lambda kv: str(kv[0])):
+        # comic archive beats PDF/EPUB, then the larger file; on a tie keep what's already in Manga
+        group.sort(key=lambda it: (it["ext"] not in COMIC_EXTS, -it["size"], not it["existing"]))
+        best = group[0]
+        for it in group[1:]:
+            ident = it.get("sha") and it.get("sha") == best.get("sha")
+            why = "identical to" if ident else f"other copy ({it['size'] / 1e6:.0f} MB) of"
+            rel = it["path"].relative_to(it["root"])
+            dest = MANGA_REMOVED_DIR / "duplicates" / (MANGA_DIR.name if it["existing"] else it["root"].name) / rel
+            plan.append(("duplicate", it["path"], dest, best["series"] or "", "", f"{why} {best['path']}"))
+        if best["existing"]:
+            continue
+        if not best["skey"]:
+            folder, name = MANGA_DIR / UNSORTED, safe(best["path"].stem, 150)
+        else:
+            folder = MANGA_DIR / display[best["skey"]]
+            name = (f"{display[best['skey']]} {manga_label(best['kind'], best['num'])}" if best["num"]
+                    else safe(re.sub(r"\s+", " ", re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", " ", best["path"].stem))
+                              .strip(" -.") or best["path"].stem, 150))
+        dest = folder / f"{name}.{best['ext']}"
+        n = 2
+        while str(dest).casefold() in taken:
+            dest = folder / f"{name} ({n}).{best['ext']}"
+            n += 1
+        taken.add(str(dest).casefold())
+        label = manga_label(best["kind"], best["num"]) if best["num"] else ""
+        plan.append(("move", best["path"], dest, display.get(best["skey"], ""), label,
+                     f"series from {best['how']}" + (f"; .{best['path'].suffix[1:]} is a page archive"
+                                                     if best["ext"] != best["path"].suffix[1:].lower() else "")))
+    for path, rel, note in unsure:
+        plan.append(("check", path, MANGA_DIR / CHECK_DIR / rel, "", "", note))
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    report = LOGS_DIR / f"manga-{stamp}.csv"
+    with open(report, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["action", "series", "volume", "from", "to", "note"])
+        for a, src, dest, series, label, note in sorted(plan, key=lambda x: (x[0] != "move", x[3].casefold(), x[4], str(x[1]))):
+            w.writerow([a, series, label, str(src), str(dest), note])
+    plan_file = LOGS_DIR / f"manga-plan-{stamp}.tsv"
+    with open(plan_file, "w", encoding="utf-8") as f:
+        f.write("# books-tools manga plan\n")
+        f.write(f"# removed_dir={MANGA_REMOVED_DIR}\n")
+        for d in sources:
+            f.write(f"# sweep={d}|{MANGA_REMOVED_DIR / '_leftovers' / d.name}|rmdir\n")
+        f.write(f"# owner_ref={ARCHIVE_DIR}\n# fix_owner={MANGA_DIR}\n")
+        for a, src, dest, *_ in plan:
+            f.write(f"{a}\t{src}\t{dest}\n")
+    counts = {}
+    for a, src, *_ in plan:
+        n, size = counts.get(a, (0, 0))
+        counts[a] = (n + 1, size + (src.stat().st_size if src.is_file() else 0))
+    series_n = len({x[3] for x in plan if x[0] == "move" and x[3]})
+    log(f"Report: {report}")
+    for a, label in (("move", "to Manga"), ("duplicate", "duplicates held back"), ("check", "to Manga/_To check")):
+        n, size = counts.get(a, (0, 0))
+        log(f"  {label}: {n} ({size / 1e9:.1f} GB)")
+    log(f"  {series_n} series; {sum(1 for x in plan if x[0] == 'move' and not x[3])} without a series go to "
+        f"Manga/{UNSORTED}")
+    log(f"Plan: {plan_file}")
+    log("Nothing has been moved. Check the report, then on the NAS run:")
+    log(f"  sudo /volume1/docker/books-tools/cleanup-apply.sh '{plan_file}'")
 
 
 # ---------------------------------------------------------------- main
@@ -1012,6 +1341,8 @@ def main():
     sub.add_parser("run")
     sub.add_parser("status")
     sub.add_parser("cleanup")
+    sub.add_parser("migrate-db")
+    sub.add_parser("manga")
     t = sub.add_parser("textbooks")
     t.add_argument("--apply", metavar="PLAN", help="carry out a reviewed textbooks plan")
     sub.add_parser("unpack")
@@ -1044,6 +1375,10 @@ def main():
         cleanup()
     elif a.cmd == "textbooks":
         textbooks(a.apply)
+    elif a.cmd == "migrate-db":
+        migrate_db()
+    elif a.cmd == "manga":
+        manga()
     elif a.cmd == "unpack":
         unpack()
     elif a.cmd == "run":

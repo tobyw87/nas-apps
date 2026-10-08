@@ -1,7 +1,7 @@
 # bookorbit
 
-[BookOrbit](https://github.com/bookorbit/bookorbit) for browsing and reading the books-tools
-Library in the browser, Send-to-Kindle by Gmail, fixing metadata, and OPDS for iOS reading apps.
+[BookOrbit](https://github.com/bookorbit/bookorbit) for browsing and reading `5_Books`
+(EPUB Archive, Textbooks, Manga) in the browser, Send-to-Kindle by Gmail, fixing metadata, and OPDS for iOS reading apps.
 
 books-tools does everything upstream (seedbox pull, MOBI→EPUB, duplicates, filing into
 `Library/Author/Title/`), so this setup has no Book Dock, download client, seedbox or indexer
@@ -15,22 +15,22 @@ integration. Audiobooks stay in Audiobookshelf.
 | Settings + secrets | `.env` (made by `setup.sh`, never committed) |
 | BookOrbit data (covers, cache) | `data/app` |
 | Database (Postgres + pgvector) | `data/postgres` |
-| Library (at `/books`, writable) | `/volume1/NAS/Archive/5_Books/Library` |
-| Textbooks | `Library/_Textbooks` (books-tools files them there), BookOrbit library "Textbooks" at `/books/_Textbooks`; the main library skips `_Textbooks/**` |
-| Comics (at `/comics`) | `/volume1/NAS/Archive/Comics`, a separate BookOrbit library |
+| EPUB Archive (library at `/books`) | `/volume1/NAS/Archive/5_Books/EPUB Archive` |
+| Textbooks (library at `/textbooks`, EPUB + PDF) | `/volume1/NAS/Archive/5_Books/Textbooks` |
+| Manga (library at `/manga`, CBZ/CBR/CB7/PDF/EPUB) | `/volume1/NAS/Archive/5_Books/Manga/<Series>/` |
 | Web UI / OPDS | `https://bookorbit.taileefdd9.ts.net` (own Tailscale name, HTTPS) |
 | Tailscale sidecar state | `data/tailscale` (keep it, or the node must log in again) |
 
 ## Seedbox stays one-way
 
 BookOrbit can edit, rename and move files in the Library, but it can't reach the seedbox: only
-the Library is mounted, it has no seedbox login (that's in `books-tools/data/rclone.conf`),
+the three 5_Books folders are mounted, it has no seedbox login (that's in `books-tools/data/rclone.conf`),
 and no download client is configured. The only path from Ultra.cc is books-tools'
-`rclone copy` seedbox → `_Seedbox_Mirror` → Library.
+`rclone copy` seedbox → `Archive/_Seedbox_Mirror/Books` → EPUB Archive / Textbooks.
 
-books-tools copes with BookOrbit's changes: it never re-reads the Library as a source, so an
-edited, renamed or deleted Library file is not copied again from the archive or mirror.
-Leave the `.books-tools` marker file in the Library alone.
+books-tools copes with BookOrbit's changes: it never re-reads these folders as a source, so an
+edited, renamed or deleted file is not copied again from the archive or mirror.
+Leave the `.books-tools` marker file in EPUB Archive alone.
 
 ## Tailscale
 
