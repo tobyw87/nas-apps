@@ -1262,6 +1262,11 @@ def manga():
                         continue
                     out_ext = PACKED_EXTS[ext]
                 series, kind, num, how = manga_info(path, ext)
+                if not series and dp != root:
+                    # "20th Century Boys/Volume 01.cbz": the folder is the series
+                    folder = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", dp.name).strip(" -._")
+                    if folder:
+                        series, how = clean_text(folder), "folder name"
                 items.append(dict(path=path, ext=out_ext, size=path.stat().st_size, series=series,
                                   kind=kind, num=num, how=how, existing=existing, root=root))
         log(f"Read {root}")
