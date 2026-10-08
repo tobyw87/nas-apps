@@ -9,13 +9,16 @@ Commands (run through books.sh on the NAS):
   run                      pull, then organize --apply (what the scheduled task runs)
   status                   counts of what has been processed
   unpack                   extract .rar/.zip author bundles into _Unpacked/ (archives only read)
+  textbooks [--apply PLAN] sort the Library: textbooks (PDF or EPUB) into _Textbooks/, and
+                           delete Library copies of PDFs that aren't textbooks (dry run first)
   cleanup                  plan moving everything except Library and the mirror out of the
                            archive (writes a plan; cleanup-apply.sh does the moving)
   setup-remote HOST USER   save the seedbox SFTP login (password read from stdin)
   rclone ...               run rclone with this tool's config (for troubleshooting)
 
 Safety rules built in:
-  * Nothing is ever deleted. Originals in the archive and mirror are only read; only cleanup's
+  * Nothing is ever deleted, except Library copies of non-textbook PDFs by
+    `textbooks --apply` (the originals stay in the archive). Originals in the archive and mirror are only read; only cleanup's
     plan (carried out by cleanup-apply.sh) moves originals, and only to holding folders.
   * The seedbox is only ever read from (rclone copy remote -> NAS, and listings).
   * New library files are written to a temp name and renamed when complete.
@@ -63,12 +66,29 @@ LATER_RAR_PART = re.compile(r"\.part0*([2-9]\d*|1\d+)\.rar$", re.I)   # unar rea
 SKIP_DIRS = {"@eaDir", "#recycle", "#snapshot", ".@__thumb"}
 MARKER = ".books-tools"
 UNSORTED = "_Unsorted"
-SPRINGER_DIR = "_Springer Textbooks"
+# Textbooks (PDF or EPUB) live in Library/_Textbooks, their own BookOrbit library.
+# PDFs that aren't textbooks are not kept in the Library at all.
+TEXTBOOK_DIR = "_Textbooks"
+SPRINGER_DIR = TEXTBOOK_DIR + "/Springer"
+OLD_SPRINGER_DIR = "_Springer Textbooks"
 CONVERT_TIMEOUT = int(os.environ.get("CONVERT_TIMEOUT", "7200"))  # seconds per book
 # Springer download names: Author2017_Chapter_Title.pdf (a chapter), 2015_Bookmatter_Title_2.pdf
 # (index/back pages), 2017_Book_Title.pdf (a whole book). Only whole books go in the Library.
 SPRINGER_PART = re.compile(r"_(Chapter|Bookmatter|Frontmatter|ReferenceWorkEntry)_")
 SPRINGER_BOOK = re.compile(r"^(\d{4})_Book_(.+)$")
+ISBN_NAME = re.compile(r"(?<!\d)97[89][-_ ]?(\d[-_ ]?){9}\d(?!\d)|_Book_")
+TEXTBOOK_FOLDER = re.compile(r"springer|text ?books?", re.I)
+TEXTBOOK_PUBLISHERS = re.compile(
+    r"\b(springer|wiley|elsevier|academic press|crc|taylor ?& ?francis|routledge|university press|"
+    r"mit press|pearson|mcgraw|cengage|o'?reilly|packt|apress|manning|no starch|addison|"
+    r"prentice|world scientific|de gruyter|birkh|sage pub|morgan kaufmann|artech|ieee|siam|"
+    r"american mathematical|wolters|kluwer|lippincott|thieme|jones ?& ?bartlett|mosby|saunders|"
+    r"butterworth|newnes|pragmatic|press syndicate of the university)", re.I)
+TEXTBOOK_TITLE = re.compile(
+    r"\b(introduction to|an introduction|handbook of|principles of|fundamentals of|"
+    r"textbook|lecture notes|\d+(st|nd|rd|th) ed(ition|\.))", re.I)
+TEXTBOOK_TAGS = re.compile(r"textbook|study aids|mathematics|physics|chemistry|engineering|"
+                           r"computer science|programming|statistics", re.I)
 
 JUNK_AUTHORS = {"unknown", "unknown author", "author", "calibre", "administrator", "admin",
                 "user", "owner", "various", "anonymous author", "none", "n/a", "na"}
@@ -99,6 +119,10 @@ def db_open():
         CREATE INDEX IF NOT EXISTS library_sha ON library(sha);
         CREATE TABLE IF NOT EXISTS authors (akey TEXT PRIMARY KEY, display TEXT);
     """)
+    cols = {r["name"] for r in db.execute("PRAGMA table_info(files)")}
+    for col in ("publisher", "tags"):   # added later; NULL = not read yet
+        if col not in cols:
+            db.execute(f"ALTER TABLE files ADD COLUMN {col} TEXT")
     return db
 
 
@@ -193,6 +217,60 @@ def ebook_meta(path):
         elif key == "author(s)" and author is None:
             author = val.strip()
     return author, title
+
+
+def extra_meta(path, ext):
+    """Publisher and subjects/tags, for spotting textbooks."""
+    if ext == "epub":
+        try:
+            with zipfile.ZipFile(path) as z:
+                container = ET.fromstring(z.read("META-INF/container.xml"))
+                opf = ET.fromstring(z.read(container.find(".//{*}rootfile").get("full-path")))
+            md = opf.find("{*}metadata")
+            if md is not None:
+                pubs = [p.text.strip() for p in md.iter(DC + "publisher") if p.text and p.text.strip()]
+                subs = [t.text.strip() for t in md.iter(DC + "subject") if t.text and t.text.strip()]
+                return (pubs[0] if pubs else ""), ", ".join(subs)
+        except Exception:
+            pass
+    try:
+        out = subprocess.run(["ebook-meta", str(path)], capture_output=True, text=True,
+                             timeout=180).stdout
+    except Exception:
+        return "", ""
+    pub = tags = ""
+    for line in out.splitlines():
+        key, _, val = line.partition(":")
+        key = key.strip().lower()
+        if key == "publisher" and not pub:
+            pub = val.strip()
+        elif key == "tags" and not tags:
+            tags = val.strip()
+    return pub, tags
+
+
+def textbook_reason(path, ext, title=None, publisher=None, tags=None, source=None):
+    """Why this looks like a textbook, or "" if it doesn't. Cheap name checks first;
+    publisher/tags are only looked at when given."""
+    for p in (path, Path(source) if source else None):
+        if p is None:
+            continue
+        if SPRINGER_BOOK.match(p.stem):
+            return "Springer book file name"
+        if ISBN_NAME.search(p.name):
+            return "ISBN in file name"
+        if OLD_SPRINGER_DIR in p.parts or TEXTBOOK_DIR in p.parts:
+            return "already filed as a textbook"
+        for d in p.parent.parts:
+            if TEXTBOOK_FOLDER.search(d):
+                return f"in folder '{d}'"
+    if title and TEXTBOOK_TITLE.search(title):
+        return f"title: {title}"
+    if publisher and TEXTBOOK_PUBLISHERS.search(publisher):
+        return f"publisher: {publisher}"
+    if tags and TEXTBOOK_TAGS.search(tags) and not re.search(r"fiction|novel", tags, re.I):
+        return f"tags: {tags[:80]}"
+    return ""
 
 
 def filename_meta(path):
@@ -353,9 +431,28 @@ def organize(apply, retry_errors=False):
 
     plan = []
     groups = {}
+    def textbook(c):
+        """Textbook check, reading publisher/tags once per file (cached in the database)."""
+        if "textbook" not in c:
+            reason = textbook_reason(c["path"], c["ext"], c["title"])
+            if not reason:
+                row = db.execute("SELECT publisher, tags FROM files WHERE path=?", (str(c["path"]),)).fetchone()
+                if row is None or row["publisher"] is None:
+                    pub, tags = extra_meta(c["path"], c["ext"])
+                    db.execute("UPDATE files SET publisher=?, tags=? WHERE path=?", (pub, tags, str(c["path"])))
+                else:
+                    pub, tags = row["publisher"], row["tags"]
+                reason = textbook_reason(c["path"], c["ext"], c["title"], pub, tags)
+            c["textbook"] = reason
+        return c["textbook"]
+
     for c in cands:
         if c["ext"] == "pdf" and SPRINGER_PART.search(c["path"].name):
             c["action"], c["note"] = "skip-part", "Springer chapter/back pages - left in the archive"
+            plan.append(c)
+            continue
+        if c["ext"] == "pdf" and not textbook(c):
+            c["action"], c["note"] = "skip-pdf", "PDF that isn't a textbook - not kept"
             plan.append(c)
             continue
         groups.setdefault(c["key"], []).append(c)
@@ -388,8 +485,13 @@ def organize(apply, retry_errors=False):
                 else:
                     best = c
                     c["action"] = "convert" if c["ext"] in CONVERT_EXTS else "copy"
+                    # a textbook if this copy, or any other copy of the same book, looks like one
+                    c["textbook"] = next((r for r in (textbook_reason(o["path"], o["ext"], o["title"])
+                                                      for o in items) if r), "") or textbook(c)
                     c["dest"] = dest_for(c, authors, taken)
                     c["note"] = f"metadata from {c['src']}" if c["src"] == "filename" else ""
+                    if c["textbook"]:
+                        c["note"] = (c["note"] + "; " if c["note"] else "") + f"textbook ({c['textbook']})"
                     if have:
                         c["note"] = (c["note"] + "; " if c["note"] else "") + f"better format than {have[1]}"
             else:
@@ -430,16 +532,17 @@ def organize(apply, retry_errors=False):
         with open(report, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
             w.writerow(["action", "author", "title", "format", "source", "destination", "note"])
-            order = {"error": 0, "convert": 1, "copy": 2, "skip-duplicate": 3, "skip-identical": 4, "skip-part": 5}
+            order = {"error": 0, "convert": 1, "copy": 2, "skip-duplicate": 3, "skip-identical": 4, "skip-part": 5,
+                     "skip-pdf": 6}
             for c in sorted(plan, key=lambda c: (order.get(c["action"], 9), str(c.get("dest") or c["path"]))):
                 w.writerow([c["action"], c["author"] or "", c["title"] or "", c["ext"], str(c["path"]),
                             str(c.get("dest") or ""), c.get("note", "")])
         log(f"Report: {report}")
     unsorted = sum(1 for c in plan if c.get("dest") and UNSORTED in Path(c["dest"]).parts)
-    springer = sum(1 for c in plan if c.get("dest") and SPRINGER_DIR in Path(c["dest"]).parts)
+    textbooks = sum(1 for c in plan if c.get("dest") and TEXTBOOK_DIR in Path(c["dest"]).parts)
     summary = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "nothing new"
     log(f"{'Done' if apply else 'Dry run (nothing changed)'} - {summary}"
-        + (f"; {springer} Springer textbooks go to {SPRINGER_DIR}" if springer else "")
+        + (f"; {textbooks} textbooks go to {TEXTBOOK_DIR}" if textbooks else "")
         + (f"; {unsorted} go to {UNSORTED} (no usable author/title)" if unsorted else ""))
     return counts
 
@@ -457,8 +560,9 @@ def best_spelling(names):
 
 def dest_for(c, authors, taken):
     ext = "pdf" if c["ext"] == "pdf" else "epub"
+    base = LIBRARY_DIR / TEXTBOOK_DIR if c.get("textbook") else LIBRARY_DIR
     if not (c["author"] and c["title"]):
-        folder = LIBRARY_DIR / UNSORTED
+        folder = base / UNSORTED
         name = safe(c["path"].stem, 150)
         m = SPRINGER_BOOK.match(c["path"].stem)
         if m:
@@ -478,7 +582,7 @@ def dest_for(c, authors, taken):
     n = 1
     while True:
         tdir = title if n == 1 else f"{title} ({n})"
-        cand = LIBRARY_DIR / author / tdir / f"{title} - {author}.{ext}"
+        cand = base / author / tdir / f"{title} - {author}.{ext}"
         if str(cand).casefold() not in taken and not cand.exists():
             taken.add(str(cand).casefold())
             return cand
@@ -661,6 +765,7 @@ def cleanup():
       placed in the Library, identical or duplicate -> REMOVED_DIR/duplicates
       Springer chapters                             -> CHAPTERS_DIR (kept, outside the Library)
       Springer front/back matter, reference entries -> REMOVED_DIR/springer-fragments
+      PDFs that aren't textbooks                    -> REMOVED_DIR/non-textbook-pdfs
       failed to convert (usually DRM)               -> Library/_Unconverted (the only copy)
       Library copy missing, or the kept copy failed -> REMOVED_DIR/_review
       anything else left (non-ebooks, folders)      -> REMOVED_DIR/_leftovers (by the apply script)
@@ -697,6 +802,8 @@ def cleanup():
                 plan.append(("chapter", path, CHAPTERS_DIR / rel, "Springer chapter, kept"))
             else:
                 plan.append(("fragment", path, REMOVED_DIR / "springer-fragments" / rel, "Springer front/back matter"))
+        elif status == "skip-pdf":
+            plan.append(("pdf", path, REMOVED_DIR / "non-textbook-pdfs" / rel, "PDF that isn't a textbook"))
         elif status == "error":
             plan.append(("unconverted", path, LIBRARY_DIR / UNCONVERTED / rel, "failed to convert; only copy"))
         else:
@@ -736,7 +843,7 @@ def cleanup():
     for action, src, _, _ in plan:
         n, size = counts.get(action, (0, 0))
         counts[action] = (n + 1, size + src.stat().st_size)
-    for action in ("duplicate", "fragment", "chapter", "unconverted", "review"):
+    for action in ("duplicate", "fragment", "pdf", "chapter", "unconverted", "review"):
         n, size = counts.get(action, (0, 0))
         log(f"  {action}: {n} file(s), {size / 1e9:.2f} GB")
     n = sum(v[0] for v in leftovers.values())
@@ -761,6 +868,138 @@ def cleanup():
     log(f"  sudo /volume1/docker/books-tools/cleanup-apply.sh '{plan_file}'")
 
 
+# ---------------------------------------------------------------- textbooks
+
+def textbook_dest(path):
+    rel = path.relative_to(LIBRARY_DIR)
+    if rel.parts[0] == OLD_SPRINGER_DIR:
+        return LIBRARY_DIR / SPRINGER_DIR / Path(*rel.parts[1:])
+    return LIBRARY_DIR / TEXTBOOK_DIR / rel
+
+
+def prune_empty(d):
+    """Remove now-empty folders from d up to (not including) the Library."""
+    while d != LIBRARY_DIR and LIBRARY_DIR in d.parents:
+        try:
+            names = [n for n in os.listdir(d) if n != "@eaDir"]
+            if names:
+                return
+            if os.path.isdir(d / "@eaDir"):
+                shutil.rmtree(d / "@eaDir")   # Synology thumbnails, only of files already moved
+            d.rmdir()
+        except OSError:
+            return
+        d = d.parent
+
+
+def textbooks(plan_file=None):
+    """Sort what's already in the Library. Dry run: write a plan to review (and edit).
+      textbook (PDF or EPUB)  -> moved to Library/_Textbooks/<same Author/Title path>
+      PDF, not a textbook     -> Library copy deleted (its original stays in the archive;
+                                 cleanup then holds it in REMOVED_DIR/non-textbook-pdfs)
+    """
+    db = db_open()
+    if plan_file:
+        return textbooks_apply(db, Path(plan_file))
+    source_of = {r["path"]: r["source"] for r in db.execute("SELECT path, source FROM library")}
+    plan = []
+    n = 0
+    for path, ext in walk_books(LIBRARY_DIR, [LIBRARY_DIR / UNCONVERTED, LIBRARY_DIR / TEXTBOOK_DIR]):
+        rel = path.relative_to(LIBRARY_DIR)
+        src = source_of.get(str(path))
+        src = src if src and src != "existing" else None
+        title = rel.parts[-2] if len(rel.parts) >= 3 else path.stem
+        reason = textbook_reason(path, ext, title, source=src)
+        if not reason:
+            pub, tags = extra_meta(path, ext)
+            reason = textbook_reason(path, ext, title, pub, tags)
+        if reason:
+            plan.append(("textbook", path, reason))
+        elif ext == "pdf":
+            plan.append(("remove", path, "PDF, not a textbook"))
+        n += 1
+        if n % 500 == 0:
+            log(f"Checked {n} Library file(s)...")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    out = LOGS_DIR / f"textbooks-plan-{stamp}.tsv"
+    with open(out, "w", encoding="utf-8") as f:
+        f.write("# books-tools textbooks plan\n")
+        f.write("# action<TAB>file<TAB>why. Edit before applying: delete a line to leave that file alone,\n")
+        f.write("# or change remove <-> textbook. textbook = move to _Textbooks; remove = delete (PDFs only).\n")
+        for action, path, reason in sorted(plan, key=lambda x: (x[0], str(x[1]))):
+            f.write(f"{action}\t{path}\t{reason}\n")
+    tb = [p for a, p, _ in plan if a == "textbook"]
+    log(f"Checked {n} Library file(s): {len(tb)} textbook(s) to move to {TEXTBOOK_DIR} "
+        f"({sum(1 for p in tb if p.suffix.lower() == '.epub')} EPUB, "
+        f"{sum(1 for p in tb if p.suffix.lower() == '.pdf')} PDF); "
+        f"{sum(1 for a, _, _ in plan if a == 'remove')} non-textbook PDF(s) to delete")
+    log(f"Plan: {out}")
+    log("Nothing changed. Check the plan (edit it if needed), then run:")
+    log(f"  sudo /volume1/docker/books-tools/books.sh textbooks --apply '{out}'")
+
+
+def textbooks_apply(db, plan_file):
+    with open(plan_file, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    if not lines or lines[0] != "# books-tools textbooks plan":
+        sys.exit(f"Not a textbooks plan: {plan_file}")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    done_log = LOGS_DIR / f"textbooks-{stamp}-done.tsv"
+    counts = {}
+    with open(done_log, "w", encoding="utf-8") as done:
+        for line in lines:
+            if not line.strip() or line.startswith("#"):
+                continue
+            action, _, rest = line.partition("\t")
+            path = Path(rest.partition("\t")[0])
+            action = action.strip()
+            result = "skipped"
+            try:
+                rel = path.relative_to(LIBRARY_DIR)
+            except ValueError:
+                rel = None
+            if rel is None or rel.parts[0] in (TEXTBOOK_DIR, UNCONVERTED):
+                result = "skipped: not a Library file to sort"
+            elif not path.exists():
+                result = "skipped: file is gone"
+            elif action == "textbook":
+                dest = textbook_dest(path)
+                if dest.exists():
+                    result = f"skipped: {dest} already exists"
+                else:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    os.rename(path, dest)
+                    db.execute("UPDATE OR REPLACE library SET path=? WHERE path=?", (str(dest), str(path)))
+                    db.execute("UPDATE files SET dest=? WHERE dest=?", (str(dest), str(path)))
+                    prune_empty(path.parent)
+                    result = f"moved to {dest}"
+            elif action == "remove":
+                if path.suffix.lower() != ".pdf":
+                    result = "skipped: only PDFs are deleted"
+                else:
+                    path.unlink()
+                    db.execute("DELETE FROM library WHERE path=?", (str(path),))
+                    db.execute("""UPDATE files SET status='skip-pdf', dest='',
+                                  note='PDF that isn''t a textbook - removed from the Library'
+                                  WHERE dest=? AND status IN ('copy','convert')""", (str(path),))
+                    prune_empty(path.parent)
+                    result = "deleted"
+            else:
+                result = f"skipped: unknown action '{action}'"
+            key = result.split(":")[0].split(" ")[0]
+            counts[key] = counts.get(key, 0) + 1
+            done.write(f"{action}\t{path}\t{result}\n")
+            if sum(counts.values()) % 250 == 0:
+                db.commit()
+    db.commit()
+    log("Done - " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+    log(f"Log: {done_log}")
+    old = LIBRARY_DIR / OLD_SPRINGER_DIR
+    if old.is_dir():
+        prune_empty(old)
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -773,6 +1012,8 @@ def main():
     sub.add_parser("run")
     sub.add_parser("status")
     sub.add_parser("cleanup")
+    t = sub.add_parser("textbooks")
+    t.add_argument("--apply", metavar="PLAN", help="carry out a reviewed textbooks plan")
     sub.add_parser("unpack")
     s = sub.add_parser("setup-remote")
     s.add_argument("host")
@@ -801,6 +1042,8 @@ def main():
         organize(a.apply, a.retry_errors)
     elif a.cmd == "cleanup":
         cleanup()
+    elif a.cmd == "textbooks":
+        textbooks(a.apply)
     elif a.cmd == "unpack":
         unpack()
     elif a.cmd == "run":

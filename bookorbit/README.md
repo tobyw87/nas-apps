@@ -16,6 +16,7 @@ integration. Audiobooks stay in Audiobookshelf.
 | BookOrbit data (covers, cache) | `data/app` |
 | Database (Postgres + pgvector) | `data/postgres` |
 | Library (at `/books`, writable) | `/volume1/NAS/Archive/5_Books/Library` |
+| Textbooks | `Library/_Textbooks` (books-tools files them there), BookOrbit library "Textbooks" at `/books/_Textbooks`; the main library skips `_Textbooks/**` |
 | Comics (at `/comics`) | `/volume1/NAS/Archive/Comics`, a separate BookOrbit library |
 | Web UI / OPDS | `https://bookorbit.taileefdd9.ts.net` (own Tailscale name, HTTPS) |
 | Tailscale sidecar state | `data/tailscale` (keep it, or the node must log in again) |

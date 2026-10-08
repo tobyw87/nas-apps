@@ -18,14 +18,18 @@ I use Windows (PowerShell) and a Mac to SSH in.
 Organizes my ebook archive and pulls ebooks one-way from my Ultra.cc seedbox.
 - Archive: `/volume1/NAS/Archive/5_Books` (Windows `Z:\Archive\5_Books`), 18,326 ebook files.
 - New library: `5_Books/Library/Author/Title/Title - Author.epub` (authors "First Last").
-  MOBI/AZW/AZW3 → converted to EPUB (MOBI not kept in library). PDFs kept only if no EPUB.
+  MOBI/AZW/AZW3 → converted to EPUB (MOBI not kept in library). PDFs kept only if no EPUB
+  and only if a textbook (my request, Oct 8: other PDFs aren't relevant to me). Textbooks (PDF
+  or EPUB) go to `Library/_Textbooks/` (Springer ones to `_Textbooks/Springer/`), their own
+  BookOrbit library; `books.sh textbooks` sorts what's already in the Library (plan, then
+  `--apply`, which deletes Library copies of non-textbook PDFs).
   Originals are never modified. `books.sh cleanup` + `cleanup-apply.sh` (my request, Oct 8) move
   everything except `Library` and `_Seedbox_Mirror` out of `5_Books`: originals already in the
   Library and Springer fragments to `Archive/_5_Books_removed` (I delete it myself), Springer
   chapters to `Archive/Springer Chapters`, failed conversions to `Library/_Unconverted`.
   Keep `_Seedbox_Mirror` intact: the pull compares against it.
 - Springer downloads in `5_Books/!_Books_old/Springer Ebooks`: `_Chapter_`/`_Bookmatter_` files are
-  skipped (left in archive); whole `YYYY_Book_Title.pdf` books go to `Library/_Springer Textbooks/`
+  skipped (left in archive); whole `YYYY_Book_Title.pdf` books go to `Library/_Textbooks/Springer/`
   (titles truncated by Springer — fix later via BookOrbit metadata lookup).
 - Seedbox pull: `rclone copy` (never sync/upload) from `/home/mynock42/media/ABS` (ebooks and
   audiobooks mixed) into `5_Books/_Seedbox_Mirror`, ebook extensions only, skipping PDFs inside
@@ -38,7 +42,7 @@ Organizes my ebook archive and pulls ebooks one-way from my Ultra.cc seedbox.
   `.lit`, `.pdb`, `.rtf`, `.txt` (converted to EPUB; rtf/txt under 20 KB ignored). `.doc` isn't
   convertible by Calibre and stays a leftover. The seedbox pull still only takes PULL_EXTS.
 - Commands: `sudo ./books.sh organize` (dry run), `organize --apply`, `pull`, `run`, `status`,
-  `unpack`, `cleanup`.
+  `unpack`, `textbooks [--apply PLAN]`, `cleanup`.
 
 ## Status (Oct 7, 2026)
 - Dry run result: convert 4,679, copy 1,337 (incl. 333 Springer books), skip-part 9,266,
