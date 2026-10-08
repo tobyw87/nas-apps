@@ -6,8 +6,10 @@
 PLAN="$1"
 [ -f "$PLAN" ] || { echo "Usage: $0 <cleanup-plan-....tsv>"; exit 1; }
 head -1 "$PLAN" | grep -q '^# books-tools cleanup plan$' || { echo "Not a cleanup plan: $PLAN"; exit 1; }
-RUNNING=$(docker ps --format '{{.Image}}') || { echo "Can't check Docker (run with sudo)."; exit 1; }
-if echo "$RUNNING" | grep -q '^books-tools'; then
+# Any books-tools container (organize, pull, a scheduled run) must be finished first.
+RUNNING=$(docker ps -q --filter label=com.docker.compose.project=books-tools) \
+  || { echo "Can't check Docker (run with sudo)."; exit 1; }
+if [ -n "$RUNNING" ]; then
   echo "A books-tools run is still going. Wait for it to finish, then run this again."; exit 1
 fi
 
