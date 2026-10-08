@@ -1,0 +1,62 @@
+# BookOrbit: browse/read the books-tools Library, Send-to-Kindle, metadata, OPDS.
+# Based on upstream's docker-compose.yml (github.com/bookorbit/bookorbit), with the
+# Library mounted READ-ONLY so BookOrbit can never rename, move or delete files
+# that books-tools manages. No Book Dock, download clients or TTS.
+# Settings and secrets live in .env (made by setup.sh, never committed).
+name: bookorbit
+
+services:
+  app:
+    container_name: bookorbit-app
+    image: ${APP_IMAGE:?required}
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    ports:
+      - "${APP_PORT:-3080}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      CLIENT_URL: ${APP_URL:?required}
+      LIBRARY_BROWSE_ROOT: /books
+      BOOK_DOCK_PATH: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - "${LIBRARY_DIR:?required}:/books:ro"
+      - ./data/app:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+
+  postgres:
+    container_name: bookorbit-db
+    image: pgvector/pgvector:pg18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
