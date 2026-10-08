@@ -42,3 +42,7 @@ credentials.json
 Thumbs.db
 *.swp
 *~
+
+# Python
+__pycache__/
+*.pyc

@@ -8,11 +8,14 @@ Commands (run through books.sh on the NAS):
                            (dry run unless --apply; never deletes or changes originals)
   run                      pull, then organize --apply (what the scheduled task runs)
   status                   counts of what has been processed
+  cleanup                  plan moving everything except Library and the mirror out of the
+                           archive (writes a plan; cleanup-apply.sh does the moving)
   setup-remote HOST USER   save the seedbox SFTP login (password read from stdin)
   rclone ...               run rclone with this tool's config (for troubleshooting)
 
 Safety rules built in:
-  * Nothing is ever deleted. Originals in the archive and mirror are only read.
+  * Nothing is ever deleted. Originals in the archive and mirror are only read; only cleanup's
+    plan (carried out by cleanup-apply.sh) moves originals, and only to holding folders.
   * The seedbox is only ever read from (rclone copy remote -> NAS, and listings).
   * New library files are written to a temp name and renamed when complete.
 """
@@ -567,6 +570,122 @@ def status():
         log(f"  ERROR {e['path']}: {e['note']}")
 
 
+# ---------------------------------------------------------------- cleanup
+
+REMOVED_DIR = Path(os.environ.get("REMOVED_DIR") or ARCHIVE_DIR.parent / "_5_Books_removed")
+CHAPTERS_DIR = Path(os.environ.get("CHAPTERS_DIR") or ARCHIVE_DIR.parent / "Springer Chapters")
+UNCONVERTED = "_Unconverted"
+SPRINGER_CHAPTER = re.compile(r"_Chapter_")
+
+
+def cleanup():
+    """Plan the archive cleanup: after it, ARCHIVE_DIR holds only the Library and the mirror.
+
+    Nothing is moved here. This writes a plan for cleanup-apply.sh, which moves files on the
+    NAS itself (same volume, so instant). Every file goes somewhere; none is deleted.
+      placed in the Library, identical or duplicate -> REMOVED_DIR/duplicates
+      Springer chapters                             -> CHAPTERS_DIR (kept, outside the Library)
+      Springer front/back matter, reference entries -> REMOVED_DIR/springer-fragments
+      failed to convert (usually DRM)               -> Library/_Unconverted (the only copy)
+      Library copy missing, or the kept copy failed -> REMOVED_DIR/_review
+      anything else left (non-ebooks, folders)      -> REMOVED_DIR/_leftovers (by the apply script)
+    """
+    db = db_open()
+    rows = {r["path"]: r for r in db.execute("SELECT path, size, mtime, status, dest, note FROM files")}
+    plan, unprocessed, unsafe = [], [], []
+    for path, ext in walk_books(ARCHIVE_DIR, [LIBRARY_DIR, MIRROR_DIR]):
+        r = rows.get(str(path))
+        st = path.stat()
+        if (r is None or not r["status"] or r["size"] != st.st_size
+                or abs(r["mtime"] - st.st_mtime) >= 1):
+            unprocessed.append(path)
+            continue
+        if any(ch in str(path) for ch in "\t\n\r"):
+            unsafe.append(path)
+            continue
+        rel = path.relative_to(ARCHIVE_DIR)
+        status = r["status"]
+        if status in ("copy", "convert"):
+            if r["dest"] and Path(r["dest"]).exists():
+                plan.append(("duplicate", path, REMOVED_DIR / "duplicates" / rel, f"in Library: {r['dest']}"))
+            else:
+                plan.append(("review", path, REMOVED_DIR / "_review" / rel, "its Library copy is missing"))
+        elif status in ("skip-identical", "skip-duplicate"):
+            # "same book as X": if X failed to convert, this may be the only readable copy
+            kept = (r["note"] or "")[len("same book as "):] if (r["note"] or "").startswith("same book as ") else ""
+            if kept and rows.get(kept) is not None and rows[kept]["status"] == "error":
+                plan.append(("review", path, REMOVED_DIR / "_review" / rel, f"the copy chosen instead failed: {kept}"))
+            else:
+                plan.append(("duplicate", path, REMOVED_DIR / "duplicates" / rel, status))
+        elif status == "skip-part":
+            if SPRINGER_CHAPTER.search(path.name):
+                plan.append(("chapter", path, CHAPTERS_DIR / rel, "Springer chapter, kept"))
+            else:
+                plan.append(("fragment", path, REMOVED_DIR / "springer-fragments" / rel, "Springer front/back matter"))
+        elif status == "error":
+            plan.append(("unconverted", path, LIBRARY_DIR / UNCONVERTED / rel, "failed to convert; only copy"))
+        else:
+            unprocessed.append(path)
+
+    planned = {p for _, p, _, _ in plan} | set(unprocessed) | set(unsafe)
+    leftovers = {}
+    for dirpath, dirnames, filenames in os.walk(ARCHIVE_DIR):
+        dp = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if (dp / d).resolve() not in (LIBRARY_DIR.resolve(), MIRROR_DIR.resolve())
+                       and d not in SKIP_DIRS]
+        for fn in filenames:
+            p = dp / fn
+            if p not in planned:
+                ext = fn.rsplit(".", 1)[-1].lower() if "." in fn else "(none)"
+                n, size = leftovers.get(ext, (0, 0))
+                leftovers[ext] = (n + 1, size + p.stat().st_size)
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    report = LOGS_DIR / f"cleanup-{stamp}.csv"
+    with open(report, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["action", "from", "to", "note"])
+        for p in unprocessed:
+            w.writerow(["NOT PROCESSED", str(p), "", "run organize --apply first"])
+        for p in unsafe:
+            w.writerow(["SKIPPED", str(p), "", "tab or newline in name; move it by hand"])
+        for action, src, dest, note in sorted(plan, key=lambda x: (x[0], str(x[1]))):
+            w.writerow([action, str(src), str(dest), note])
+        for ext, (n, size) in sorted(leftovers.items(), key=lambda x: -x[1][1]):
+            w.writerow(["leftover", f"{n} .{ext} file(s)", str(REMOVED_DIR / "_leftovers"),
+                        f"{size / 1e6:.1f} MB, not ebooks or skipped folders"])
+    log(f"Report: {report}")
+
+    counts = {}
+    for action, src, _, _ in plan:
+        n, size = counts.get(action, (0, 0))
+        counts[action] = (n + 1, size + src.stat().st_size)
+    for action in ("duplicate", "fragment", "chapter", "unconverted", "review"):
+        n, size = counts.get(action, (0, 0))
+        log(f"  {action}: {n} file(s), {size / 1e9:.2f} GB")
+    n = sum(v[0] for v in leftovers.values())
+    log(f"  leftover (non-ebooks etc.): {n} file(s), {sum(v[1] for v in leftovers.values()) / 1e9:.2f} GB")
+    if unprocessed:
+        log(f"STOP: {len(unprocessed)} ebook file(s) haven't been processed by organize --apply yet "
+            f"(listed in the report). Run organize --apply, then cleanup again. No plan written.")
+        return
+    if unsafe:
+        log(f"Note: {len(unsafe)} file(s) have a tab or newline in the name and are left in place.")
+
+    plan_file = LOGS_DIR / f"cleanup-plan-{stamp}.tsv"
+    with open(plan_file, "w", encoding="utf-8") as f:
+        f.write("# books-tools cleanup plan\n")
+        for key, val in (("archive_dir", ARCHIVE_DIR), ("library_dir", LIBRARY_DIR),
+                         ("mirror_dir", MIRROR_DIR), ("removed_dir", REMOVED_DIR)):
+            f.write(f"# {key}={val}\n")
+        for action, src, dest, _ in plan:
+            f.write(f"{action}\t{src}\t{dest}\n")
+    log(f"Plan: {plan_file}")
+    log("Nothing has been moved. Check the report, then on the NAS run:")
+    log(f"  sudo /volume1/docker/books-tools/cleanup-apply.sh '{plan_file}'")
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -578,6 +697,7 @@ def main():
     o.add_argument("--retry-errors", action="store_true", help="try failed conversions again")
     sub.add_parser("run")
     sub.add_parser("status")
+    sub.add_parser("cleanup")
     s = sub.add_parser("setup-remote")
     s.add_argument("host")
     s.add_argument("user")
@@ -603,6 +723,8 @@ def main():
         pull()
     elif a.cmd == "organize":
         organize(a.apply, a.retry_errors)
+    elif a.cmd == "cleanup":
+        cleanup()
     elif a.cmd == "run":
         pull()
         organize(True)

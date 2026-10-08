@@ -41,6 +41,27 @@ Long first run in the background:
     sudo docker ps            # find the container name
     sudo docker logs -f <name>
 
+## Cleanup: leave only the Library and the mirror
+
+After `organize --apply` has finished, this empties the archive folder of everything except
+`Library` and `_Seedbox_Mirror`. It moves files; it never deletes them.
+
+    sudo /volume1/docker/books-tools/books.sh cleanup        # plan + report, moves nothing
+    sudo /volume1/docker/books-tools/cleanup-apply.sh '<plan file it prints>'
+
+| What | Goes to |
+|---|---|
+| Originals already in the Library (copied, converted, identical, duplicate) | `Archive/_5_Books_removed/duplicates` |
+| Springer front/back matter, reference entries | `Archive/_5_Books_removed/springer-fragments` |
+| Springer chapters (kept, not in the Library) | `Archive/Springer Chapters` |
+| Books that failed to convert (only copy) | `Library/_Unconverted` |
+| Library copy missing, or the kept version failed | `Archive/_5_Books_removed/_review` |
+| Everything else (non-ebooks, emptied folders) | `Archive/_5_Books_removed/_leftovers` |
+
+Both are on the same volume, so moving is instant and frees no space until you delete
+`_5_Books_removed` yourself. Look in `_review` and `_leftovers` first. Run `--retry-errors`
+before cleanup if you want another go at failed conversions; afterwards they're in the Library.
+
 ## Scheduled task
 
 DSM → Control Panel → Task Scheduler → Create → Scheduled Task → User-defined script.
