@@ -3,9 +3,9 @@
 [BookOrbit](https://github.com/bookorbit/bookorbit) for browsing and reading the books-tools
 Library in the browser, Send-to-Kindle by Gmail, fixing metadata, and OPDS for iOS reading apps.
 
-It only **reads** the Library. books-tools does everything upstream (seedbox pull, MOBI→EPUB,
-duplicates, filing into `Library/Author/Title/`), so this setup has no Book Dock, download
-client, seedbox or indexer integration. Audiobooks stay in Audiobookshelf.
+books-tools does everything upstream (seedbox pull, MOBI→EPUB, duplicates, filing into
+`Library/Author/Title/`), so this setup has no Book Dock, download client, seedbox or indexer
+integration. Audiobooks stay in Audiobookshelf.
 
 ## Where things are
 
@@ -15,16 +15,19 @@ client, seedbox or indexer integration. Audiobooks stay in Audiobookshelf.
 | Settings + secrets | `.env` (made by `setup.sh`, never committed) |
 | BookOrbit data (covers, cache) | `data/app` |
 | Database (Postgres + pgvector) | `data/postgres` |
-| Library (read-only at `/books`) | `/volume1/NAS/Archive/5_Books/Library` |
+| Library (at `/books`, writable) | `/volume1/NAS/Archive/5_Books/Library` |
 | Web UI / OPDS | `http://treebeard.taileefdd9.ts.net:3080` (over Tailscale) |
 
-## Read-only Library
+## Seedbox stays one-way
 
-The Library is mounted `:ro`, so BookOrbit can't rename, move or delete anything books-tools
-manages. Metadata edits are stored in BookOrbit's database, not in the book files. These
-features need write access and won't work as set up: writing metadata/covers into the book
-files, bulk rename/move, uploads, and deleting books from disk. Leave "write to files" off in
-the library settings.
+BookOrbit can edit, rename and move files in the Library, but it can't reach the seedbox: only
+the Library is mounted, it has no seedbox login (that's in `books-tools/data/rclone.conf`),
+and no download client is configured. The only path from Ultra.cc is books-tools'
+`rclone copy` seedbox → `_Seedbox_Mirror` → Library.
+
+books-tools copes with BookOrbit's changes: it never re-reads the Library as a source, so an
+edited, renamed or deleted Library file is not copied again from the archive or mirror.
+Leave the `.books-tools` marker file in the Library alone.
 
 ## Commands
 

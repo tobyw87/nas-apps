@@ -1,7 +1,8 @@
 # BookOrbit: browse/read the books-tools Library, Send-to-Kindle, metadata, OPDS.
-# Based on upstream's docker-compose.yml (github.com/bookorbit/bookorbit), with the
-# Library mounted READ-ONLY so BookOrbit can never rename, move or delete files
-# that books-tools manages. No Book Dock, download clients or TTS.
+# Based on upstream's docker-compose.yml (github.com/bookorbit/bookorbit).
+# BookOrbit may edit, rename and move files in the Library. It has no access to the
+# seedbox: only the Library is mounted, and books-tools is the one-way path down.
+# No Book Dock, download clients, indexers or TTS.
 # Settings and secrets live in .env (made by setup.sh, never committed).
 name: bookorbit
 
@@ -26,7 +27,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - "${LIBRARY_DIR:?required}:/books:ro"
+      - "${LIBRARY_DIR:?required}:/books"
       - ./data/app:/data
     read_only: true
     tmpfs:
