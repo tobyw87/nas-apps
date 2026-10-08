@@ -25,13 +25,15 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       CLIENT_URL: ${APP_URL:?required}
-      LIBRARY_BROWSE_ROOT: /books
       BOOK_DOCK_PATH: ""
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - "${LIBRARY_DIR:?required}:/books"
+      # Comics (CBZ/CBR) as their own BookOrbit library, outside 5_Books so the books
+      # cleanup never touches them.
+      - "${COMICS_DIR:-/volume1/NAS/Archive/Comics}:/comics"
       - ./data/app:/data
     read_only: true
     tmpfs:
