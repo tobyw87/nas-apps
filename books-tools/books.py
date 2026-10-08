@@ -8,6 +8,7 @@ Commands (run through books.sh on the NAS):
                            (dry run unless --apply; never deletes or changes originals)
   run                      pull, then organize --apply (what the scheduled task runs)
   status                   counts of what has been processed
+  unpack                   extract .rar/.zip author bundles into _Unpacked/ (archives only read)
   cleanup                  plan moving everything except Library and the mirror out of the
                            archive (writes a plan; cleanup-apply.sh does the moving)
   setup-remote HOST USER   save the seedbox SFTP login (password read from stdin)
@@ -46,10 +47,19 @@ SEEDBOX_PATH = os.environ.get("SEEDBOX_PATH", "/home/mynock42/media/ABS")
 RCLONE_REMOTE = os.environ.get("RCLONE_REMOTE", "seedbox")
 RCLONE_CONFIG = os.environ.get("RCLONE_CONFIG", str(DATA_DIR / "rclone.conf"))
 
-EBOOK_EXTS = {"epub", "mobi", "azw", "azw3", "prc", "pdf"}
-CONVERT_EXTS = {"mobi", "azw", "azw3", "prc"}
+PULL_EXTS = {"epub", "mobi", "azw", "azw3", "prc", "pdf"}   # what comes down from the seedbox
+# Older formats found in the archive (and inside its .rar/.zip author bundles); converted to EPUB.
+EBOOK_EXTS = PULL_EXTS | {"lit", "pdb", "rtf", "txt"}
+CONVERT_EXTS = {"mobi", "azw", "azw3", "prc", "lit", "pdb", "rtf", "txt"}
 AUDIO_EXTS = ["m4b", "mp3", "m4a", "flac", "opus", "aac", "ogg", "wma", "wav"]
-PRIORITY = {"epub": 3, "mobi": 2, "azw": 2, "azw3": 2, "prc": 2, "pdf": 1}
+# Best copy of a book wins: EPUB, then structured ebook formats, then RTF, PDF, plain text.
+PRIORITY = {"epub": 3, "mobi": 2, "azw": 2, "azw3": 2, "prc": 2, "lit": 2, "pdb": 2,
+            "rtf": 1.5, "pdf": 1, "txt": 0.5}
+TEXT_EXTS = {"rtf", "txt"}
+MIN_TEXT_BYTES = 20_000          # smaller .txt/.rtf are readmes and index files, not books
+ARCHIVE_EXTS = {"rar", "zip"}
+UNPACKED = "_Unpacked"           # archives are extracted to ARCHIVE_DIR/_Unpacked/<archive path>/
+LATER_RAR_PART = re.compile(r"\.part0*([2-9]\d*|1\d+)\.rar$", re.I)   # unar reads these via part 1
 SKIP_DIRS = {"@eaDir", "#recycle", "#snapshot", ".@__thumb"}
 MARKER = ".books-tools"
 UNSORTED = "_Unsorted"
@@ -206,6 +216,8 @@ def read_meta(path, ext):
             author = title = None
     if not (fix_author(author) and fix_title(title)):
         a2, t2 = ebook_meta(path)
+        if t2 and clean_text(t2) == clean_text(path.stem):
+            t2 = None  # ebook-meta just echoed the file name (txt/rtf); parse it below instead
         author = author if fix_author(author) else a2
         title = title if fix_title(title) else t2
         src = src or "ebook-meta"
@@ -243,6 +255,8 @@ def walk_books(root, exclude=()):
                 continue
             ext = fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
             if ext in EBOOK_EXTS:
+                if ext in TEXT_EXTS and (dp / fn).stat().st_size < MIN_TEXT_BYTES:
+                    continue
                 yield dp / fn, ext
 
 
@@ -511,7 +525,7 @@ def build_filter(audio_files):
     lines = []
     for d in dirs:
         lines.append("- /*.pdf" if d == "" else f"- /{glob_escape(d)}/**.pdf")
-    lines.append("+ *.{" + ",".join(sorted(EBOOK_EXTS)) + "}")
+    lines.append("+ *.{" + ",".join(sorted(PULL_EXTS)) + "}")
     lines.append("- *")
     return "\n".join(lines) + "\n"
 
@@ -576,6 +590,59 @@ def status():
     errs = db.execute("SELECT path, note FROM files WHERE status='error' LIMIT 20").fetchall()
     for e in errs:
         log(f"  ERROR {e['path']}: {e['note']}")
+
+
+# ---------------------------------------------------------------- unpack
+
+def unpack():
+    """Extract the .rar/.zip archives in the archive (never the Library or the mirror) into
+    ARCHIVE_DIR/_Unpacked/<archive path>/ so organize can file the books inside them.
+    Archives are only read. Each one is extracted once (remembered in state.db); archives found
+    inside archives are extracted on the next pass."""
+    db = db_open()
+    db.execute("""CREATE TABLE IF NOT EXISTS archives (
+                    path TEXT PRIMARY KEY, size INTEGER, mtime REAL, status TEXT, note TEXT)""")
+    skip = {LIBRARY_DIR.resolve(), MIRROR_DIR.resolve()}
+    counts = {}
+    for _ in range(3):
+        done_this_pass = 0
+        for dirpath, dirnames, filenames in os.walk(ARCHIVE_DIR):
+            dp = Path(dirpath)
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")
+                                 and (dp / d).resolve() not in skip)
+            for fn in sorted(filenames):
+                ext = fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
+                if ext not in ARCHIVE_EXTS or fn.startswith(".") or LATER_RAR_PART.search(fn):
+                    continue
+                path = dp / fn
+                st = path.stat()
+                row = db.execute("SELECT size, mtime FROM archives WHERE path=?", (str(path),)).fetchone()
+                if row and row["size"] == st.st_size and abs(row["mtime"] - st.st_mtime) < 1:
+                    continue
+                rel = path.relative_to(ARCHIVE_DIR)
+                out = (path.parent if rel.parts[0] == UNPACKED else ARCHIVE_DIR / UNPACKED / rel.parent) / path.stem
+                out.mkdir(parents=True, exist_ok=True)
+                try:
+                    r = subprocess.run(["unar", "-q", "-s", "-D", "-p", "", "-o", str(out), str(path)],
+                                       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1800)
+                    status, note = ("ok", "") if r.returncode == 0 else \
+                        ("error", (r.stderr or r.stdout or f"exit {r.returncode}").strip()[-300:])
+                except subprocess.TimeoutExpired:
+                    status, note = "error", "timed out"
+                db.execute("INSERT OR REPLACE INTO archives VALUES (?,?,?,?,?)",
+                           (str(path), st.st_size, st.st_mtime, status, note))
+                counts[status] = counts.get(status, 0) + 1
+                done_this_pass += 1
+                if done_this_pass % 50 == 0:
+                    db.commit()
+                    log(f"Unpacked {done_this_pass} archive(s)...")
+        db.commit()
+        if not done_this_pass:
+            break
+    for r in db.execute("SELECT path, note FROM archives WHERE status='error' LIMIT 20"):
+        log(f"  ERROR {r['path']}: {r['note']}")
+    log(f"Unpack done - {', '.join(f'{k}: {v}' for k, v in sorted(counts.items())) or 'nothing new'}; "
+        f"files are in {ARCHIVE_DIR / UNPACKED}. Next: organize, then organize --apply.")
 
 
 # ---------------------------------------------------------------- cleanup
@@ -706,6 +773,7 @@ def main():
     sub.add_parser("run")
     sub.add_parser("status")
     sub.add_parser("cleanup")
+    sub.add_parser("unpack")
     s = sub.add_parser("setup-remote")
     s.add_argument("host")
     s.add_argument("user")
@@ -733,6 +801,8 @@ def main():
         organize(a.apply, a.retry_errors)
     elif a.cmd == "cleanup":
         cleanup()
+    elif a.cmd == "unpack":
+        unpack()
     elif a.cmd == "run":
         pull()
         organize(True)

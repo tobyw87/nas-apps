@@ -41,6 +41,18 @@ Long first run in the background:
     sudo docker ps            # find the container name
     sudo docker logs -f <name>
 
+## Archives (.rar / .zip)
+
+Many archives in the old collection are whole-author bundles (one `.rar` with 20+ novels in
+`.lit`/`.pdf`/`.rtf`). Extract them first, then organize as usual:
+
+    sudo /volume1/docker/books-tools/books.sh unpack           # -> 5_Books/_Unpacked/
+    sudo /volume1/docker/books-tools/books.sh organize         # dry run: check the report
+    sudo /volume1/docker/books-tools/books.sh organize --apply
+
+`.lit`, `.pdb`, `.rtf` and `.txt` books are converted to EPUB (the best copy of each book wins:
+EPUB > MOBI/LIT/PDB > RTF > PDF > TXT). `.doc` can't be converted and is left alone.
+
 ## Cleanup: leave only the Library and the mirror
 
 After `organize --apply` has finished, this empties the archive folder of everything except

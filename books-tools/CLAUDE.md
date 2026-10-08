@@ -32,7 +32,13 @@ Organizes my ebook archive and pulls ebooks one-way from my Ultra.cc seedbox.
   audiobook folders. Login saved in `data/rclone.conf` on the NAS.
 - State in `data/state.db` (SQLite) so runs resume; reports to `/volume1/NAS/Logs/books`.
 - `docker-compose.yml` must keep `init: true` (Calibre's ebook-meta leaves zombie processes otherwise).
-- Commands: `sudo ./books.sh organize` (dry run), `organize --apply`, `pull`, `run`, `status`, `cleanup`.
+- The archive's 817 `.rar` + 1,994 `.zip` are author bundles (e.g. ~20 Philip K. Dick novels as
+  .lit/.pdf/.rtf), not single books. `books.sh unpack` extracts them (via `unar`) into
+  `5_Books/_Unpacked/`; organize then treats them like any other originals. Also handled now:
+  `.lit`, `.pdb`, `.rtf`, `.txt` (converted to EPUB; rtf/txt under 20 KB ignored). `.doc` isn't
+  convertible by Calibre and stays a leftover. The seedbox pull still only takes PULL_EXTS.
+- Commands: `sudo ./books.sh organize` (dry run), `organize --apply`, `pull`, `run`, `status`,
+  `unpack`, `cleanup`.
 
 ## Status (Oct 7, 2026)
 - Dry run result: convert 4,679, copy 1,337 (incl. 333 Springer books), skip-part 9,266,
@@ -42,8 +48,9 @@ Organizes my ebook archive and pulls ebooks one-way from my Ultra.cc seedbox.
   retries a SplitError with `--flow-size 0` and allows 2 h per book (`CONVERT_TIMEOUT`).
 
 ## Next up
-1. `organize --apply --retry-errors` for the 20, then `cleanup` + `cleanup-apply.sh`, then
-   schedule `books.sh run` every 6 h in DSM Task Scheduler.
+1. Retry done Oct 8: 18 of 20 converted (6,014 in Library; 2 corrupt MOBIs left). Now:
+   `unpack` → `organize` (dry run, check) → `organize --apply` → `cleanup` → `cleanup-apply.sh`,
+   then schedule `books.sh run` every 6 h in DSM Task Scheduler.
 2. ~~Install BookOrbit~~ done Oct 8: `bookorbit/`, https://bookorbit.taileefdd9.ts.net.
    Then run the cleanup above.
 3. Facebook photo export (JSON) → merge into photo archive
