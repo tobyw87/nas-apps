@@ -1,0 +1,17 @@
+# Not a long-running service: books.sh runs one command at a time with
+# "docker compose run --rm books ...". Settings live in .env.
+services:
+  books:
+    build: .
+    init: true
+    image: books-tools:latest
+    user: "${PUID}:${PGID}"
+    env_file: .env
+    environment:
+      HOME: /data/home
+      DATA_DIR: /data
+      RCLONE_CONFIG: /data/rclone.conf
+    volumes:
+      - ./data:/data
+      - "${ARCHIVE_DIR}:${ARCHIVE_DIR}"
+      - "${LOGS_DIR}:${LOGS_DIR}"
