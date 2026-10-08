@@ -34,8 +34,10 @@ Leave the `.books-tools` marker file in the Library alone.
 
 The `tailscale` container joins the tailnet as `bookorbit` and serves BookOrbit over HTTPS
 (`tailscale-serve.json`), forwarding to `app:3000` on the compose network. Tailnet-only, no Funnel.
-First start: `sudo docker compose logs tailscale` shows a login link (or set `TS_AUTHKEY` in
-`.env`). In the Tailscale admin console, turn off key expiry for `bookorbit` and make sure
+First start needs `TS_AUTHKEY` in `.env` (admin console → Settings → Keys → Generate auth key,
+not reusable, not ephemeral), like chi-eats/finance. Without it the sidecar waits for a browser
+login, times out after a minute and restarts with a new identity. After the first login the
+state in `data/tailscale` is reused and the key is no longer needed. In the Tailscale admin console, turn off key expiry for `bookorbit` and make sure
 MagicDNS and HTTPS certificates are on (DNS page). `http://<nas>:3080` still works as a fallback.
 
 ## Commands
