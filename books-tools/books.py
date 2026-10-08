@@ -973,6 +973,36 @@ def textbooks(plan_file=None):
     log(f"  sudo /volume1/docker/books-tools/books.sh textbooks --apply '{out}'")
 
 
+def textbooks_gone(db, action, path):
+    """A plan line whose file is no longer there (deleted elsewhere, or a second run)."""
+    if action == "remove":
+        db.execute("DELETE FROM library WHERE path=?", (str(path),))
+        db.execute("""UPDATE files SET status='skip-pdf', dest='',
+                      note='PDF that isn''t a textbook - removed from the Library'
+                      WHERE dest=? AND status IN ('copy','convert')""", (str(path),))
+        return "gone: already deleted (recorded)"
+    if action != "textbook":
+        return "skipped: file is gone"
+    dest = textbook_dest(path)
+    if dest.exists():
+        return "skipped: already moved"
+    # Put it back from its original in the archive (still there until cleanup moves it).
+    row = db.execute("SELECT path, status FROM files WHERE dest=? AND status IN ('copy','convert')",
+                     (str(path),)).fetchone()
+    src = Path(row["path"]) if row else None
+    if not src or not src.exists():
+        return "skipped: file is gone and its original wasn't found"
+    if row["status"] != "copy" or src.suffix.lower() != path.suffix.lower():
+        return f"skipped: file is gone; original needs converting: {src}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.parent / f".partial-{dest.name}"
+    shutil.copyfile(src, tmp)
+    os.replace(tmp, dest)
+    db.execute("UPDATE OR REPLACE library SET path=? WHERE path=?", (str(dest), str(path)))
+    db.execute("UPDATE files SET dest=? WHERE dest=?", (str(dest), str(path)))
+    return f"restored to {dest} from {src}"
+
+
 def textbooks_apply(db, plan_file):
     with open(plan_file, encoding="utf-8") as f:
         lines = f.read().splitlines()
@@ -998,7 +1028,7 @@ def textbooks_apply(db, plan_file):
             if rel is None or not rel.parts or rel.parts[0] == UNCONVERTED:
                 result = "skipped: not an EPUB Archive file to sort"
             elif not path.exists():
-                result = "skipped: file is gone"
+                result = textbooks_gone(db, action, path)
             elif action == "textbook":
                 dest = textbook_dest(path)
                 if dest.exists():
