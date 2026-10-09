@@ -1,5 +1,5 @@
 #!/bin/sh
-# Carries out a plan written by `books.sh cleanup` or `books.sh manga`. Moves files only; never
+# Carries out a plan written by `books.sh cleanup`, `books.sh manga` or `books.sh cbr2cbz`. Moves files only; never
 # deletes a file.
 #   sudo /volume1/docker/books-tools/cleanup-apply.sh /volume1/NAS/Logs/books/<plan>.tsv
 # Afterwards each folder the plan sweeps is emptied of whatever is left (non-ebooks, covers,
@@ -9,8 +9,8 @@
 PLAN="$1"
 [ -f "$PLAN" ] || { echo "Usage: $0 <plan file>"; exit 1; }
 case "$(head -1 "$PLAN")" in
-  "# books-tools cleanup plan"|"# books-tools manga plan") ;;
-  *) echo "Not a books-tools cleanup or manga plan: $PLAN"; exit 1 ;;
+  "# books-tools cleanup plan"|"# books-tools manga plan"|"# books-tools cbr2cbz plan") ;;
+  *) echo "Not a books-tools plan: $PLAN"; exit 1 ;;
 esac
 # Any books-tools container (organize, pull, a scheduled run) must be finished first.
 RUNNING=$(docker ps -q --filter label=com.docker.compose.project=books-tools) \

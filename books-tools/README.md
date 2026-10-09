@@ -90,6 +90,19 @@ One copy per volume: a comic archive beats PDF/EPUB, then the larger file wins; 
 folders (covers, `metadata.opf`, empty folders) goes to `Archive/_Manga_removed/_leftovers`, and
 the source folders are removed. Delete `_Manga_removed` yourself once you've checked it.
 
+
+### CBR → CBZ
+
+    sudo /volume1/docker/books-tools/books.sh cbr2cbz            # dry run: lists the .cbr files
+    sudo /volume1/docker/books-tools/books.sh cbr2cbz --apply    # repack each as .cbz
+    sudo /volume1/docker/books-tools/cleanup-apply.sh '<plan file it prints>'   # .cbr originals out
+
+BookOrbit reads a whole CBR into memory several times over, so big ones get it killed at its
+memory cap; CBZs it reads through the ZIP index. Each .cbr in `Manga/` is extracted (unar) and
+written as a stored .cbz next to it (same images, no recompression), checked (same files and
+sizes, CRCs), then renamed into place. The originals are only moved, to
+`Archive/_Manga_removed/cbr-originals`, for you to delete. Rescan Manga after cleanup-apply.
+
 ## Textbooks already in EPUB Archive
 
     sudo /volume1/docker/books-tools/books.sh textbooks            # plan, changes nothing

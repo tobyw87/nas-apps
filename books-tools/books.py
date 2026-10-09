@@ -12,6 +12,8 @@ Commands (run through books.sh on the NAS):
   textbooks [--apply PLAN] sort the Library: textbooks (PDF or EPUB) into _Textbooks/, and
                            delete Library copies of PDFs that aren't textbooks (dry run first)
   manga                    plan moving the manga folders into Manga/<Series>/ (cleanup-apply.sh moves)
+  cbr2cbz [--apply]        repack Manga's .cbr files as .cbz (BookOrbit runs out of memory on big
+                           CBRs); originals listed in a plan for cleanup-apply.sh to move out
   migrate-db               update remembered paths after migrate.sh (one-time layout change)
   cleanup                  plan moving everything except Library and the mirror out of the
                            archive (writes a plan; cleanup-apply.sh does the moving)
@@ -1364,6 +1366,135 @@ def manga():
     log(f"  sudo /volume1/docker/books-tools/cleanup-apply.sh '{plan_file}'")
 
 
+# ---------------------------------------------------------------- cbr2cbz
+
+CBR_TMP = ARCHIVE_DIR / ".cbr2cbz-tmp"
+
+
+def rar_listing(path):
+    """[(name, size)] of the files in a RAR, via lsar; None if it can't be listed."""
+    r = subprocess.run(["lsar", "-j", str(path)], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                       timeout=600)
+    if r.returncode != 0:
+        return None
+    try:
+        entries = json.loads(r.stdout).get("lsarContents", [])
+    except json.JSONDecodeError:
+        return None
+    return [(e.get("XADFileName", ""), e.get("XADFileSize", 0)) for e in entries if not e.get("XADIsDirectory")]
+
+
+def cbr2cbz(apply, min_mb=0):
+    """Repack Manga's .cbr (RAR) files as .cbz (ZIP, stored, same images, no recompression).
+
+    BookOrbit reads a whole CBR into memory several times over to get its cover and metadata,
+    so a 900 MB CBR needs ~3-4 GB and gets it killed; CBZs are read through the ZIP index.
+    Each new .cbz is written to a temp name, checked (same files, same sizes, CRCs) and then
+    renamed. The .cbr originals are left where they are and listed in a plan; cleanup-apply.sh
+    moves them to MANGA_REMOVED_DIR/cbr-originals (deleted only by you).
+    """
+    if not MANGA_DIR.is_dir():
+        log(f"No Manga folder at {MANGA_DIR}")
+        return
+    cbrs = sorted(p for p in MANGA_DIR.rglob("*") if p.is_file() and p.suffix.lower() == ".cbr"
+                  and p.stat().st_size >= min_mb * 1e6)
+    total = sum(p.stat().st_size for p in cbrs)
+    log(f"{len(cbrs)} .cbr file(s) in {MANGA_DIR} ({total / 1e9:.1f} GB)"
+        + (f", {min_mb} MB and up" if min_mb else ""))
+    if not apply:
+        for p in sorted(cbrs, key=lambda p: -p.stat().st_size)[:15]:
+            log(f"  {p.stat().st_size / 1e6:6.0f} MB  {p.relative_to(MANGA_DIR)}")
+        log("Dry run, nothing changed. To convert: books.sh cbr2cbz --apply "
+            "(needs free space for one extracted file plus the new .cbz at a time).")
+        return
+
+    plan, counts = [], {}
+    for n, src in enumerate(cbrs, 1):
+        dest = src.with_suffix(".cbz")
+        held = MANGA_REMOVED_DIR / "cbr-originals" / src.relative_to(MANGA_DIR)
+        size = src.stat().st_size
+        rel = src.relative_to(MANGA_DIR)
+        if zipfile.is_zipfile(src):
+            # Really a ZIP with the wrong extension: renaming it is the whole fix.
+            if dest.exists():
+                status = "skipped: .cbz of the same name exists"
+            else:
+                os.rename(src, dest)
+                status = "renamed (was already a ZIP)"
+        else:
+            listing = rar_listing(src)
+            if not listing:
+                status = "error: can't read the RAR"
+            elif dest.exists():
+                try:
+                    with zipfile.ZipFile(dest) as z:
+                        same = sorted(i.file_size for i in z.infolist() if not i.is_dir()) == \
+                            sorted(sz for _, sz in listing)
+                except zipfile.BadZipFile:
+                    same = False
+                if same:
+                    plan.append((src, held))
+                    status = "converted earlier"
+                else:
+                    status = "skipped: a different .cbz of the same name exists"
+            elif shutil.disk_usage(MANGA_DIR).free < 2.2 * size + 1e9:
+                log(f"Not enough free space for {rel} ({size / 1e9:.1f} GB); stopping here.")
+                break
+            else:
+                status = repack(src, dest, listing)
+                if status == "converted":
+                    plan.append((src, held))
+        counts[status.split(":")[0]] = counts.get(status.split(":")[0], 0) + 1
+        log(f"[{n}/{len(cbrs)}] {status}: {rel}")
+    shutil.rmtree(CBR_TMP, ignore_errors=True)
+
+    log("Done - " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+    if not plan:
+        return
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    plan_file = LOGS_DIR / f"cbr2cbz-plan-{stamp}.tsv"
+    with open(plan_file, "w", encoding="utf-8") as f:
+        f.write("# books-tools cbr2cbz plan\n")
+        f.write(f"# removed_dir={MANGA_REMOVED_DIR}\n")
+        for src, held in plan:
+            f.write(f"cbr-original\t{src}\t{held}\n")
+    log(f"Each .cbr now has a checked .cbz next to it. Before scanning Manga in BookOrbit, move the "
+        f"{len(plan)} .cbr original(s) out (nothing is deleted):")
+    log(f"  sudo /volume1/docker/books-tools/cleanup-apply.sh '{plan_file}'")
+
+
+def repack(src, dest, listing):
+    """Extract one RAR with unar and write its files to a stored ZIP; returns a status."""
+    tmp = CBR_TMP / "x"
+    shutil.rmtree(CBR_TMP, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    part = dest.with_name(dest.name + ".part")
+    try:
+        r = subprocess.run(["unar", "-q", "-D", "-p", "", "-o", str(tmp), str(src)],
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=3600)
+        if r.returncode != 0:
+            return "error: unar " + (r.stderr or r.stdout or f"exit {r.returncode}").strip()[-200:]
+        files = sorted((p for p in tmp.rglob("*") if p.is_file()), key=lambda p: str(p.relative_to(tmp)))
+        if sorted(p.stat().st_size for p in files) != sorted(sz for _, sz in listing):
+            return f"error: extracted {len(files)} file(s), the RAR lists {len(listing)} (or sizes differ)"
+        with zipfile.ZipFile(part, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
+            for p in files:
+                z.write(p, p.relative_to(tmp).as_posix())
+        with zipfile.ZipFile(part) as z:
+            bad = z.testzip()
+            if bad or len(z.infolist()) != len(files):
+                return f"error: check of the new .cbz failed ({bad or 'file count'})"
+        shutil.copystat(src, part)
+        os.rename(part, dest)
+        return "converted"
+    except subprocess.TimeoutExpired:
+        return "error: unar timed out"
+    finally:
+        part.unlink(missing_ok=True)
+        shutil.rmtree(CBR_TMP, ignore_errors=True)
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -1378,6 +1509,9 @@ def main():
     sub.add_parser("cleanup")
     sub.add_parser("migrate-db")
     sub.add_parser("manga")
+    cb = sub.add_parser("cbr2cbz")
+    cb.add_argument("--apply", action="store_true", help="convert (default: dry run)")
+    cb.add_argument("--min-mb", type=int, default=0, help="only .cbr files this size and up")
     t = sub.add_parser("textbooks")
     t.add_argument("--apply", metavar="PLAN", help="carry out a reviewed textbooks plan")
     sub.add_parser("unpack")
@@ -1414,6 +1548,8 @@ def main():
         migrate_db()
     elif a.cmd == "manga":
         manga()
+    elif a.cmd == "cbr2cbz":
+        cbr2cbz(a.apply, a.min_mb)
     elif a.cmd == "unpack":
         unpack()
     elif a.cmd == "run":
