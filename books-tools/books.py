@@ -1566,7 +1566,7 @@ def manga_tag(apply):
         log(f"No Manga folder at {MANGA_DIR}")
         return
     manga_tag_undo()
-    counts, samples = {}, []
+    counts, samples, touched = {}, [], set()
     files = sorted(p for p in MANGA_DIR.rglob("*") if p.is_file() and len(p.relative_to(MANGA_DIR).parts) > 1
                    and not p.relative_to(MANGA_DIR).parts[0].startswith("_"))
     for path in files:
@@ -1600,6 +1600,7 @@ def manga_tag(apply):
             new = comicinfo_xml(old, series, number, title)
             try:
                 (tag_rewrite if old else tag_append)(path, new)
+                touched.add(path.parent)
             except Exception as e:
                 status = "error"
                 log(f"  error: {path.relative_to(MANGA_DIR)}: {e}")
@@ -1607,6 +1608,9 @@ def manga_tag(apply):
         done = sum(v for k, v in counts.items() if k in ("append", "rewrite"))
         if apply and done and done % 100 == 0:
             log(f"Tagged {done}...")
+    # BookOrbit skips folders whose mtime hasn't changed, and an in-place append doesn't change it.
+    for d in touched:
+        os.utime(d)
     for line in samples:
         log(line)
     log(("Done - " if apply else "Dry run, nothing changed - ")

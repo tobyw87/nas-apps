@@ -101,7 +101,8 @@ writes Series (the `Manga/<Series>` folder) and Number (`vNN`/`cNNN` from the fi
 unnumbered books) into each CBZ. Pages aren't touched: the XML is appended (the archive's index
 at the end is journalled first, so an interrupted run is rolled back on the next start); a CBZ
 with an existing ComicInfo.xml keeps its other fields and is rewritten to a temp file, checked,
-and renamed. PDFs/EPUBs/CBRs in Manga are left alone.
+and renamed. Changed series folders get a fresh mtime (BookOrbit skips unchanged folders).
+PDFs/EPUBs/CBRs in Manga are left alone.
 
 ### CBR → CBZ
 
