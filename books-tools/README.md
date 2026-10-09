@@ -91,6 +91,18 @@ folders (covers, `metadata.opf`, empty folders) goes to `Archive/_Manga_removed/
 the source folders are removed. Delete `_Manga_removed` yourself once you've checked it.
 
 
+### Series grouping in BookOrbit
+
+    sudo /volume1/docker/books-tools/books.sh manga-tag            # dry run
+    sudo /volume1/docker/books-tools/books.sh manga-tag --apply    # then rescan Manga
+
+BookOrbit's "Collapse series" only uses ComicInfo.xml inside each CBZ, not folder names. This
+writes Series (the `Manga/<Series>` folder) and Number (`vNN`/`cNNN` from the file name; Title for
+unnumbered books) into each CBZ. Pages aren't touched: the XML is appended (the archive's index
+at the end is journalled first, so an interrupted run is rolled back on the next start); a CBZ
+with an existing ComicInfo.xml keeps its other fields and is rewritten to a temp file, checked,
+and renamed. PDFs/EPUBs/CBRs in Manga are left alone.
+
 ### CBR → CBZ
 
     sudo /volume1/docker/books-tools/books.sh cbr2cbz            # dry run: lists the .cbr files

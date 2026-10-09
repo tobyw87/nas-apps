@@ -12,6 +12,8 @@ Commands (run through books.sh on the NAS):
   textbooks [--apply PLAN] sort the Library: textbooks (PDF or EPUB) into _Textbooks/, and
                            delete Library copies of PDFs that aren't textbooks (dry run first)
   manga                    plan moving the manga folders into Manga/<Series>/ (cleanup-apply.sh moves)
+  manga-tag [--apply]      write Series/Number (from Manga/<Series>/ and vNN) into each CBZ's
+                           ComicInfo.xml so BookOrbit can group series
   cbr2cbz [--apply]        repack Manga's .cbr files as .cbz (BookOrbit runs out of memory on big
                            CBRs); originals listed in a plan for cleanup-apply.sh to move out
   migrate-db               update remembered paths after migrate.sh (one-time layout change)
@@ -1495,6 +1497,172 @@ def repack(src, dest, listing):
         shutil.rmtree(CBR_TMP, ignore_errors=True)
 
 
+# ---------------------------------------------------------------- manga-tag
+
+TAG_JOURNAL = DATA_DIR / "manga-tag-journal.json"
+
+
+def comicinfo_xml(old, series, number, title):
+    """ComicInfo.xml bytes with Series/Number (and Title for unnumbered books) set, other fields kept."""
+    try:
+        x = ET.fromstring(old) if old else None
+    except ET.ParseError:
+        x = None
+    if x is None or x.tag != "ComicInfo":
+        x = ET.Element("ComicInfo")
+    for tag, val in (("Series", series), ("Number", number), ("Title", title)):
+        if val is None:
+            continue
+        el = x.find(tag)
+        if el is None:
+            el = ET.SubElement(x, tag)
+        el.text = val
+    return b'<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(x, encoding="utf-8")
+
+
+def manga_tag_target(path):
+    """(series, number, title) a Manga/<Series>/... CBZ should carry."""
+    series = path.relative_to(MANGA_DIR).parts[0]
+    _, kind, num = parse_manga_name(path.stem)
+    if num:
+        f = float(num)
+        return series, (str(int(f)) if f.is_integer() else f"{f:g}"), None
+    title = re.sub(r"^" + re.escape(series) + r"\s*-\s*", "", path.stem).strip() or path.stem
+    return series, None, title
+
+
+def zip_tail(path):
+    """Offset of the ZIP central directory (where an append starts writing)."""
+    with zipfile.ZipFile(path) as z:
+        return z.start_dir
+
+
+def manga_tag_undo():
+    """Put back the end of a CBZ whose append was cut short (power cut, kill)."""
+    if not TAG_JOURNAL.exists():
+        return
+    j = json.loads(TAG_JOURNAL.read_text())
+    path, tail = Path(j["path"]), bytes.fromhex(j["tail"])
+    with open(path, "r+b") as f:
+        f.truncate(j["start"])
+        f.seek(j["start"])
+        f.write(tail)
+    os.utime(path, ns=(j["mtime_ns"], j["mtime_ns"]))
+    log(f"Restored {path} after an interrupted run.")
+    TAG_JOURNAL.unlink()
+
+
+def manga_tag(apply):
+    """Write Series/Number into each Manga CBZ's ComicInfo.xml so BookOrbit can group series.
+
+    BookOrbit only learns a book's series from ComicInfo.xml inside the file (folder names are
+    ignored), so without it "Collapse series" does nothing. Series = the Manga/<Series> folder,
+    Number = the vNN/cNNN in the file name. Pages are never touched: a new ComicInfo.xml is
+    appended to the archive (only its index at the end is rewritten; the old end is journalled
+    first so an interrupted run is undone on the next start). A CBZ that already has a root
+    ComicInfo.xml is rewritten to a temp file, checked, then renamed over the original.
+    """
+    if not MANGA_DIR.is_dir():
+        log(f"No Manga folder at {MANGA_DIR}")
+        return
+    manga_tag_undo()
+    counts, samples = {}, []
+    files = sorted(p for p in MANGA_DIR.rglob("*") if p.is_file() and len(p.relative_to(MANGA_DIR).parts) > 1
+                   and not p.relative_to(MANGA_DIR).parts[0].startswith("_"))
+    for path in files:
+        if path.suffix.lower() != ".cbz":
+            counts["not a CBZ (left alone)"] = counts.get("not a CBZ (left alone)", 0) + 1
+            continue
+        series, number, title = manga_tag_target(path)
+        try:
+            with zipfile.ZipFile(path) as z:
+                name = next((n for n in z.namelist() if n.lower() == "comicinfo.xml"), None)
+                old = z.read(name) if name else None
+        except (zipfile.BadZipFile, OSError) as e:
+            status = "error"
+            log(f"  error: {path.relative_to(MANGA_DIR)}: {e}")
+            counts[status] = counts.get(status, 0) + 1
+            continue
+        if old:
+            try:
+                x = ET.fromstring(old)
+                cur = ((x.findtext("Series") or "").strip(), (x.findtext("Number") or "").strip())
+            except ET.ParseError:
+                cur = ("", "")
+            if cur[0] == series and (number is None or cur[1] == number):
+                counts["already tagged"] = counts.get("already tagged", 0) + 1
+                continue
+        status = "rewrite" if old else "append"
+        if len(samples) < 8:
+            samples.append(f"  {status}: {path.relative_to(MANGA_DIR)} -> Series={series!r}"
+                           + (f" Number={number}" if number else f" Title={title!r}"))
+        if apply:
+            new = comicinfo_xml(old, series, number, title)
+            try:
+                (tag_rewrite if old else tag_append)(path, new)
+            except Exception as e:
+                status = "error"
+                log(f"  error: {path.relative_to(MANGA_DIR)}: {e}")
+        counts[status] = counts.get(status, 0) + 1
+        done = sum(v for k, v in counts.items() if k in ("append", "rewrite"))
+        if apply and done and done % 100 == 0:
+            log(f"Tagged {done}...")
+    for line in samples:
+        log(line)
+    log(("Done - " if apply else "Dry run, nothing changed - ")
+        + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+    if not apply:
+        log("To write the tags: books.sh manga-tag --apply   (then rescan Manga in BookOrbit)")
+
+
+def tag_append(path, xml):
+    st = path.stat()
+    start = zip_tail(path)
+    with open(path, "rb") as f:
+        f.seek(start)
+        tail = f.read()
+    TAG_JOURNAL.write_text(json.dumps({"path": str(path), "start": start, "tail": tail.hex(),
+                                       "mtime_ns": st.st_mtime_ns}))
+    try:
+        with zipfile.ZipFile(path, "a", allowZip64=True) as z:
+            z.writestr(zipfile.ZipInfo("ComicInfo.xml", time.localtime()[:6]), xml)
+        with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+            if "ComicInfo.xml" not in names or not z.read("ComicInfo.xml") == xml:
+                raise RuntimeError("ComicInfo.xml didn't read back")
+            first = next((n for n in names if n != "ComicInfo.xml" and not n.endswith("/")), None)
+            if first:
+                with z.open(first) as f:
+                    f.read(4096)
+    except BaseException:
+        manga_tag_undo()
+        raise
+    TAG_JOURNAL.unlink()
+
+
+def tag_rewrite(path, xml):
+    part = path.with_name(path.name + ".part")
+    try:
+        with zipfile.ZipFile(path) as src, zipfile.ZipFile(part, "w", allowZip64=True) as dst:
+            n = 0
+            for info in src.infolist():
+                if info.filename.lower() == "comicinfo.xml":
+                    continue
+                with src.open(info) as fi, dst.open(info, "w", force_zip64=info.file_size > 2**31) as fo:
+                    shutil.copyfileobj(fi, fo, 1 << 20)
+                n += 1
+            dst.writestr(zipfile.ZipInfo("ComicInfo.xml", time.localtime()[:6]), xml)
+            if dst.comment != src.comment:
+                dst.comment = src.comment
+        with zipfile.ZipFile(part) as z:
+            if len(z.infolist()) != n + 1 or z.testzip() is not None:
+                raise RuntimeError("check of the rewritten CBZ failed")
+        shutil.copymode(path, part)
+        os.rename(part, path)
+    finally:
+        part.unlink(missing_ok=True)
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -1509,6 +1677,8 @@ def main():
     sub.add_parser("cleanup")
     sub.add_parser("migrate-db")
     sub.add_parser("manga")
+    mt = sub.add_parser("manga-tag")
+    mt.add_argument("--apply", action="store_true", help="write the tags (default: dry run)")
     cb = sub.add_parser("cbr2cbz")
     cb.add_argument("--apply", action="store_true", help="convert (default: dry run)")
     cb.add_argument("--min-mb", type=int, default=0, help="only .cbr files this size and up")
@@ -1548,6 +1718,8 @@ def main():
         migrate_db()
     elif a.cmd == "manga":
         manga()
+    elif a.cmd == "manga-tag":
+        manga_tag(a.apply)
     elif a.cmd == "cbr2cbz":
         cbr2cbz(a.apply, a.min_mb)
     elif a.cmd == "unpack":
