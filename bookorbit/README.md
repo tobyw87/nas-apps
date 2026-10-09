@@ -35,7 +35,9 @@ Leave the `.books-tools` marker file in EPUB Archive alone.
 ## Tailscale
 
 The `tailscale` container joins the tailnet as `bookorbit` and serves BookOrbit over HTTPS
-(`tailscale-serve.json`), forwarding to `app:3000` on the compose network. Tailnet-only, no Funnel.
+(`tailscale-serve.json`), forwarding to `app:3000` on the compose network. Funnel is on (Oct 9) so KOReader on the Kindle and Kobo, which can't run Tailscale, can
+sync from anywhere: the login page is public, so use a strong password and keep sign-up off.
+The tailnet policy needs `nodeAttrs` `funnel` for the node; set `AllowFunnel` to false to go back.
 First start needs `TS_AUTHKEY` in `.env` (admin console → Settings → Keys → Generate auth key,
 not reusable, not ephemeral), like chi-eats/finance. Without it the sidecar waits for a browser
 login, times out after a minute and restarts with a new identity. After the first login the
