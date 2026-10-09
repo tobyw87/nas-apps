@@ -50,6 +50,11 @@ services:
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 30s
+    # Hard cap so a big scan gets BookOrbit OOM-killed and restarted instead of
+    # swapping the whole NAS to a standstill (Oct 9: 2.46 GB during the Manga scan,
+    # load 19, SSH dead). memswap = mem means no swap for this container.
+    mem_limit: ${APP_MEM_LIMIT:-2500m}
+    memswap_limit: ${APP_MEM_LIMIT:-2500m}
 
   tailscale:
     container_name: bookorbit-ts
