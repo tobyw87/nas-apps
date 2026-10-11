@@ -167,3 +167,12 @@ User: root. Schedule: every 6 hours (or daily). Script:
 
 Paste the new installer in the NAS terminal, then
 `cd /volume1/docker/books-tools && sudo docker compose build`. Your `.env` and `data/` are kept.
+
+## regroup (fix EPUB Archive layout)
+
+`books.sh regroup` plans moves so every file in `EPUB Archive` is `Author/Title/Title - Author.epub`
+(old-archive books were `Title/Author/Author - Title.epub`). Author and title come from the book's own
+metadata (else the file name); if the author's surname isn't anywhere in the old path the book is left
+alone and listed in the CSV as "check". It moves nothing: review `regroup-<stamp>.csv`, then run
+`cleanup-apply.sh <plan>`. Identical copies go to `_5_Books_removed/regroup-duplicates`; emptied
+folders are removed (empty only). Never deletes a book.

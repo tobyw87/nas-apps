@@ -61,6 +61,17 @@ hdr sweep | while IFS='|' read -r SWEEP TO RM; do
   fi
 done
 
+# Folders the plan emptied (e.g. old Title/ folders in EPUB Archive): remove empty ones only. A folder
+# holding nothing but Synology's @eaDir thumbnails has that moved to the holding folder first.
+hdr prune | while read -r P; do
+  [ -d "$P" ] || continue
+  find "$P" -depth -mindepth 2 -type d -name '@eaDir' | while read -r E; do
+    [ -z "$(ls -A "$(dirname "$E")" | grep -v '^@eaDir$')" ] || continue
+    mkdir -p "$REMOVED/_eaDir" && mv "$E" "$REMOVED/_eaDir/$(date +%s%N)" && echo "eaDir${TAB}$E" >> "$LOG"
+  done
+  find "$P" -depth -mindepth 1 -type d -empty -exec rmdir {} \; 2>/dev/null
+done
+
 # Folders made here belong to root; give them (and moved files) to the books user like the rest.
 REF=$(hdr owner_ref)
 if [ -n "$REF" ] && [ -e "$REF" ]; then

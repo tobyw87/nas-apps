@@ -1810,6 +1810,105 @@ def tag_rewrite(path, xml):
 
 # ---------------------------------------------------------------- main
 
+# ---------------------------------------------------------------- regroup the EPUB Archive
+
+def regroup_conforming(rel):
+    """Already Author/Title/<Title - Author>.ext with a "First Last" author folder."""
+    return (len(rel.parts) == 3 and fix_author(rel.parts[0]) == rel.parts[0]
+            and Path(rel.parts[2]).stem.endswith(" - " + rel.parts[0]))
+
+
+def regroup(check_only=False):
+    """Plan moves so every file in EPUB Archive is Author/Title/Title - Author.epub.
+    Author and title come from the book's own metadata, else the folder/file names. Moves nothing:
+    writes a cleanup-style plan (carried out by cleanup-apply.sh) and a CSV of the ones it isn't
+    sure about, which are left where they are."""
+    require_new_layout()
+    skip = {UNSORTED, UNCONVERTED, SPRINGER_DIR, *OLD_TEXTBOOK_DIRS}
+    authors = {}
+    todo = []
+    for path, ext in walk_books(LIBRARY_DIR):
+        rel = path.relative_to(LIBRARY_DIR)
+        if rel.parts[0] in skip:
+            continue
+        ok = regroup_conforming(rel)
+        if ok and ext == "epub":      # same names either way round, so ask the book who wrote it
+            try:
+                a = fix_author(epub_meta(path)[0])
+            except Exception:
+                a = None
+            ok = not a or norm(a) == norm(rel.parts[0])
+        if ok:
+            authors.setdefault(norm(rel.parts[0]), rel.parts[0])
+        else:
+            todo.append((path, ext, rel))
+    log(f"{len(todo)} file(s) are not in Author/Title/ layout; reading their metadata...")
+    plan, check, taken = [], [], {}
+    n = 0
+    for path, ext, rel in todo:
+        n += 1
+        if n % 500 == 0:
+            log(f"Read {n} of {len(todo)}...")
+        author, title, src = read_meta(path, ext)
+        why = f"metadata ({src})"
+        if not (author and title):
+            fa, ft = filename_meta(path)
+            author = author or fix_author(fa)
+            title = title or fix_title(ft)
+            why = "file name"
+        if not (author and title):
+            check.append((path, "", "", "no author/title found"))
+            continue
+        # the author's surname must appear somewhere in the old path, or it is suspicious
+        sur = norm(author.split()[-1])
+        if sur and sur not in norm(str(rel)):
+            check.append((path, author, title, f"author '{author}' not in the old path"))
+            continue
+        adir = authors.setdefault(norm(author), safe(author, 80))
+        tsafe = safe(title, 120)
+        k = 1
+        while True:
+            tdir = tsafe if k == 1 else f"{tsafe} ({k})"
+            dest = LIBRARY_DIR / adir / tdir / f"{tsafe} - {adir}.{ext}"
+            other = taken.get(str(dest).casefold())
+            if other is None and not dest.exists():
+                break
+            same = sha256(other or dest) == sha256(path)
+            if same:
+                dest = REMOVED_DIR / "regroup-duplicates" / rel
+                break
+            k += 1
+        if dest == path:
+            continue
+        if REMOVED_DIR not in dest.parents:
+            taken[str(dest).casefold()] = path
+        plan.append(("duplicate" if REMOVED_DIR in dest.parents else "move", path, dest, why))
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    plan_file = LOGS_DIR / f"regroup-plan-{stamp}.tsv"
+    with open(plan_file, "w", encoding="utf-8") as f:
+        f.write("# books-tools cleanup plan\n")
+        f.write(f"# removed_dir={REMOVED_DIR}\n# prune={LIBRARY_DIR}\n")
+        f.write(f"# owner_ref={TEXTBOOKS_DIR}\n# fix_owner={LIBRARY_DIR}\n")
+        for action, src, dest, _ in plan:
+            f.write(f"{action}\t{src}\t{dest}\n")
+    report = LOGS_DIR / f"regroup-{stamp}.csv"
+    with open(report, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["action", "from", "to", "why"])
+        for action, src, dest, why in plan:
+            w.writerow([action, src.relative_to(LIBRARY_DIR), dest, why])
+        for src, a, t, why in check:
+            w.writerow(["check (left alone)", src.relative_to(LIBRARY_DIR), f"{a} / {t}", why])
+    moves = sum(1 for p in plan if p[0] == "move")
+    log(f"Plan: {moves} move(s), {len(plan) - moves} identical duplicate(s) to hold, "
+        f"{len(check)} left alone to check")
+    log(f"Report: {report}")
+    log(f"Plan: {plan_file}")
+    log("Nothing has been moved. Look at the report, then on the NAS run:")
+    log(f"  sudo /volume1/docker/books-tools/cleanup-apply.sh '{plan_file}'")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1820,6 +1919,7 @@ def main():
     sub.add_parser("run")
     sub.add_parser("status")
     sub.add_parser("cleanup")
+    sub.add_parser("regroup")
     sub.add_parser("migrate-db")
     sub.add_parser("manga")
     mt = sub.add_parser("manga-tag")
@@ -1857,6 +1957,8 @@ def main():
         organize(a.apply, a.retry_errors)
     elif a.cmd == "cleanup":
         cleanup()
+    elif a.cmd == "regroup":
+        regroup()
     elif a.cmd == "textbooks":
         textbooks(a.apply)
     elif a.cmd == "migrate-db":
