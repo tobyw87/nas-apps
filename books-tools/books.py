@@ -1888,25 +1888,24 @@ def regroup(check_only=False):
             log(f"Read {n} of {len(todo)}...")
         author, title, src = read_meta(path, ext)
         why = f"metadata ({src})"
-        swapped = False
+        guessed = False
         fixed = unswap(author, title, rel.parts[0])
         if fixed and fixed[0] and fixed[1]:
             author, title = fixed
-            swapped = True
             why = "metadata had author and title swapped"
         if not (author and title):
             fa, ft = filename_meta(path)
             author = author or fix_author(fa)
             title = title or fix_title(ft)
             why = "file name"
-            swapped = True
+            guessed = True
         if not (author and title):
             check.append((path, "", "", "no author/title found"))
             continue
         title = regroup_title(title, rel)
         # author read from the book's own metadata is trusted; anything guessed must be in the old path
         sur = norm(author.split()[-1])
-        if (swapped or src != "epub") and sur and sur not in norm(str(rel)):
+        if (guessed or src != "epub") and sur and sur not in norm(str(rel)):
             check.append((path, author, title, f"author '{author}' not in the old path"))
             continue
         adir = authors.setdefault(norm(author), safe(author, 80))
