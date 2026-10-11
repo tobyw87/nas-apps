@@ -1812,6 +1812,20 @@ def tag_rewrite(path, xml):
 
 # ---------------------------------------------------------------- regroup the EPUB Archive
 
+NAME_FORM = re.compile(r"^([^,\-]{1,40}, [^,\-]{1,40}?)(?:\s+-\s+.+)?$")   # "Cherryh, C J" (+ " - Knight 1")
+
+
+def regroup_unswap(author, title):
+    """Old-archive books have author and title swapped in their metadata ("Cherryh, C J" is the
+    title and "The Dreamstone" the author). Returns (real author, real title), or None if fine."""
+    if not (author and title) or "," in author:
+        return None
+    m = NAME_FORM.match(title.strip())
+    if not m:
+        return None
+    return fix_author(m.group(1)), fix_title(author)
+
+
 def regroup_conforming(rel):
     """Already Author/Title/<Title - Author>.ext with a "First Last" author folder."""
     return (len(rel.parts) == 3 and fix_author(rel.parts[0]) == rel.parts[0]
@@ -1827,6 +1841,12 @@ def regroup(check_only=False):
     skip = {UNSORTED, UNCONVERTED, SPRINGER_DIR, *OLD_TEXTBOOK_DIRS}
     authors = {}
     todo = []
+    subs = {}                       # top folder -> its subfolders: a real author has many, a swapped title few
+    for path, ext in walk_books(LIBRARY_DIR):
+        r = path.relative_to(LIBRARY_DIR)
+        if len(r.parts) >= 3:
+            subs.setdefault(r.parts[0], set()).add(r.parts[1])
+    unswap = lambda a, t, top: None if len(subs.get(top, ())) >= 4 else regroup_unswap(a, t)
     for path, ext in walk_books(LIBRARY_DIR):
         rel = path.relative_to(LIBRARY_DIR)
         if rel.parts[0] in skip:
@@ -1834,10 +1854,11 @@ def regroup(check_only=False):
         ok = regroup_conforming(rel)
         if ok and ext == "epub":      # same names either way round, so ask the book who wrote it
             try:
-                a = fix_author(epub_meta(path)[0])
+                ra, rt = epub_meta(path)
             except Exception:
-                a = None
-            ok = not a or norm(a) == norm(rel.parts[0])
+                ra = rt = None
+            a = fix_author(ra)
+            ok = (not a or norm(a) == norm(rel.parts[0])) and not unswap(ra, rt, rel.parts[0])
         if ok:
             authors.setdefault(norm(rel.parts[0]), rel.parts[0])
         else:
@@ -1851,6 +1872,10 @@ def regroup(check_only=False):
             log(f"Read {n} of {len(todo)}...")
         author, title, src = read_meta(path, ext)
         why = f"metadata ({src})"
+        fixed = unswap(author, title, rel.parts[0])
+        if fixed and fixed[0] and fixed[1]:
+            author, title = fixed
+            why = "metadata had author and title swapped"
         if not (author and title):
             fa, ft = filename_meta(path)
             author = author or fix_author(fa)
