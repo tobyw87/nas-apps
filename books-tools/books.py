@@ -1953,6 +1953,60 @@ def regroup(check_only=False):
     log(f"  sudo /volume1/docker/books-tools/cleanup-apply.sh '{plan_file}'")
 
 
+# ---------------------------------------------------------------- collect converted books
+
+CONVERTED_DIR = Path(os.environ.get("CONVERTED_DIR") or ARCHIVE_DIR.parent / "Converted")
+
+
+def converted(formats=None):
+    """Plan moving every book this tool converted (MOBI/AZW/LIT/RTF... -> EPUB) out of the libraries
+    into CONVERTED_DIR, keeping Author/Title/ paths. Moves nothing: writes a cleanup-style plan."""
+    require_new_layout()
+    db = db_open()
+    moved = {}          # old path -> new path, from every earlier plan's log (oldest first)
+    for f in sorted(LOGS_DIR.glob("*-moved.tsv"), key=lambda x: x.stat().st_mtime):
+        for line in f.read_text(encoding="utf-8").splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3:
+                moved[parts[1]] = parts[2]
+    want = {x.strip().lower().lstrip(".") for x in formats.split(",")} if formats else None
+    plan, by_ext, missing = [], {}, 0
+    for r in db.execute("SELECT path, dest FROM files WHERE status='convert' AND dest!='' ORDER BY dest"):
+        ext = r["path"].rsplit(".", 1)[-1].lower()
+        if want and ext not in want:
+            continue
+        cur = r["dest"]
+        for _ in range(5):
+            if cur in moved:
+                cur = moved[cur]
+        cur = Path(cur)
+        if not cur.exists():
+            missing += 1
+            continue
+        for root, prefix in ((LIBRARY_DIR, ""), (TEXTBOOKS_DIR, "Textbooks")):
+            if root in cur.parents:
+                plan.append(("converted", cur, CONVERTED_DIR / prefix / cur.relative_to(root)))
+                by_ext[ext] = by_ext.get(ext, 0) + 1
+                break
+        else:
+            missing += 1
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    plan_file = LOGS_DIR / f"converted-plan-{stamp}.tsv"
+    with open(plan_file, "w", encoding="utf-8") as f:
+        f.write("# books-tools cleanup plan\n")
+        f.write(f"# removed_dir={REMOVED_DIR}\n# prune={LIBRARY_DIR}\n")
+        f.write(f"# owner_ref={TEXTBOOKS_DIR}\n# fix_owner={CONVERTED_DIR}\n")
+        for action, src, dest in plan:
+            f.write(f"{action}\t{src}\t{dest}\n")
+    log(f"{len(plan)} converted book(s) to move to {CONVERTED_DIR} "
+        f"({', '.join(f'{k}: {v}' for k, v in sorted(by_ext.items(), key=lambda x: -x[1]))}); "
+        f"{missing} not found where expected (moved or deleted since)")
+    log(f"Plan: {plan_file}")
+    log("Nothing has been moved. To go ahead, on the NAS run:")
+    log(f"  sudo /volume1/docker/books-tools/cleanup-apply.sh '{plan_file}'")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1964,6 +2018,8 @@ def main():
     sub.add_parser("status")
     sub.add_parser("cleanup")
     sub.add_parser("regroup")
+    cv = sub.add_parser("converted")
+    cv.add_argument("--formats", help="only books converted from these formats, e.g. rtf,txt")
     sub.add_parser("migrate-db")
     sub.add_parser("manga")
     mt = sub.add_parser("manga-tag")
@@ -2001,6 +2057,8 @@ def main():
         organize(a.apply, a.retry_errors)
     elif a.cmd == "cleanup":
         cleanup()
+    elif a.cmd == "converted":
+        converted(a.formats)
     elif a.cmd == "regroup":
         regroup()
     elif a.cmd == "textbooks":

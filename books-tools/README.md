@@ -176,3 +176,10 @@ metadata (else the file name); if the author's surname isn't anywhere in the old
 alone and listed in the CSV as "check". It moves nothing: review `regroup-<stamp>.csv`, then run
 `cleanup-apply.sh <plan>`. Identical copies go to `_5_Books_removed/regroup-duplicates`; emptied
 folders are removed (empty only). Never deletes a book.
+
+## converted (collect converted books)
+
+`books.sh converted [--formats rtf,txt]` plans moving every book the tool converted to EPUB (all, or only
+from the given source formats) out of EPUB Archive/Textbooks into `Archive/Converted/` (outside 5_Books,
+so BookOrbit doesn't scan it), keeping `Author/Title/` paths. It follows earlier regroup moves. Moves
+nothing: apply the plan with `cleanup-apply.sh`. The unconverted originals stay in `_5_Books_removed`.

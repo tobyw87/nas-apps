@@ -48,7 +48,7 @@ Organizes my ebook archive and pulls ebooks one-way from my Ultra.cc seedbox.
   `.lit`, `.pdb`, `.rtf`, `.txt` (converted to EPUB; rtf/txt under 20 KB ignored). `.doc` isn't
   convertible by Calibre and stays a leftover. The seedbox pull still only takes PULL_EXTS.
 - Commands: `sudo ./books.sh organize` (dry run), `organize --apply`, `pull`, `run`, `status`,
-  `unpack`, `textbooks [--apply PLAN]`, `manga`, `manga-tag [--apply]`, `cbr2cbz [--apply]`, `cleanup`, `regroup` (plan; apply with cleanup-apply.sh); one-time `migrate.sh`.
+  `unpack`, `textbooks [--apply PLAN]`, `manga`, `manga-tag [--apply]`, `cbr2cbz [--apply]`, `cleanup`, `regroup`, `converted [--formats]` (both plan-only; apply with cleanup-apply.sh); one-time `migrate.sh`.
 - `cbr2cbz` (Oct 9): BookOrbit loads a whole CBR into memory several times (node-unrar-js), so
   700 MB+ CBRs got it OOM-killed at its 2.5 GB cap. Manga's .cbr files are repacked as stored
   .cbz (checked, then renamed); the .cbr originals go to `Archive/_Manga_removed/cbr-originals`
