@@ -32,7 +32,7 @@ Organizes my ebook archive and pulls ebooks one-way from my Ultra.cc seedbox.
   Originals are never modified. `books.sh cleanup` + `cleanup-apply.sh` (my request, Oct 8) move
   everything except the three folders out of `5_Books`: originals already in the
   Library and Springer fragments to `Archive/_5_Books_removed` (I delete it myself), Springer
-  chapters to `Archive/Springer Chapters`, failed conversions to `EPUB Archive/_Unconverted`.
+  chapters to `Archive/Springer Chapters`, failed conversions to `Archive/Unconverted Books` (outside the libraries, so BookOrbit never scans them).
   Keep the mirror intact: the pull compares against it.
 - Springer downloads in `5_Books/!_Books_old/Springer Ebooks`: `_Chapter_`/`_Bookmatter_` files are
   skipped (left in archive); whole `YYYY_Book_Title.pdf` books go to `Textbooks/Springer/`

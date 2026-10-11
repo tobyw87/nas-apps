@@ -920,6 +920,9 @@ def unpack():
 REMOVED_DIR = Path(os.environ.get("REMOVED_DIR") or ARCHIVE_DIR.parent / "_5_Books_removed")
 CHAPTERS_DIR = Path(os.environ.get("CHAPTERS_DIR") or ARCHIVE_DIR.parent / "Springer Chapters")
 UNCONVERTED = "_Unconverted"
+# Books that couldn't be converted (corrupt/DRM LIT, RTFs Calibre and the text fallback both reject)
+# are kept, but outside every BookOrbit library.
+UNCONVERTED_DIR = Path(os.environ.get("UNCONVERTED_DIR") or ARCHIVE_DIR.parent / "Unconverted Books")
 SPRINGER_CHAPTER = re.compile(r"_Chapter_")
 
 
@@ -932,7 +935,7 @@ def cleanup():
       Springer chapters                             -> CHAPTERS_DIR (kept, outside the Library)
       Springer front/back matter, reference entries -> REMOVED_DIR/springer-fragments
       PDFs that aren't textbooks                    -> REMOVED_DIR/non-textbook-pdfs
-      failed to convert (usually DRM)               -> Library/_Unconverted (the only copy)
+      failed to convert                             -> UNCONVERTED_DIR, "Unconverted Books" (the only copy)
       Library copy missing, or the kept copy failed -> REMOVED_DIR/_review
       anything else left (non-ebooks, folders)      -> REMOVED_DIR/_leftovers (by the apply script)
     Manga comes in through `manga`, not here.
@@ -973,7 +976,7 @@ def cleanup():
         elif status == "skip-pdf":
             plan.append(("pdf", path, REMOVED_DIR / "non-textbook-pdfs" / rel, "PDF that isn't a textbook"))
         elif status == "error":
-            plan.append(("unconverted", path, LIBRARY_DIR / UNCONVERTED / rel, "failed to convert; only copy"))
+            plan.append(("unconverted", path, UNCONVERTED_DIR / rel, "failed to convert; only copy"))
         else:
             unprocessed.append(path)
 
@@ -1032,7 +1035,7 @@ def cleanup():
         for d in KEEP_DIRS:
             if d.parent == ARCHIVE_DIR:
                 f.write(f"# keep={d.name}\n")
-        f.write(f"# owner_ref={LIBRARY_DIR}\n# fix_owner={LIBRARY_DIR / UNCONVERTED}\n")
+        f.write(f"# owner_ref={LIBRARY_DIR}\n# fix_owner={UNCONVERTED_DIR}\n")
         for action, src, dest, _ in plan:
             f.write(f"{action}\t{src}\t{dest}\n")
     log(f"Plan: {plan_file}")

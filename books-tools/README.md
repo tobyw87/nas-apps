@@ -148,7 +148,7 @@ folders. It moves files; it never deletes them.
 | Springer front/back matter, reference entries | `Archive/_5_Books_removed/springer-fragments` |
 | PDFs that aren't textbooks | `Archive/_5_Books_removed/non-textbook-pdfs` |
 | Springer chapters (kept, not in 5_Books) | `Archive/Springer Chapters` |
-| Books that failed to convert (only copy) | `EPUB Archive/_Unconverted` |
+| Books that failed to convert (only copy) | `Archive/Unconverted Books` (outside the libraries) |
 | Filed copy missing, or the kept version failed | `Archive/_5_Books_removed/_review` |
 | Everything else (non-ebooks, emptied folders) | `Archive/_5_Books_removed/_leftovers` |
 
