@@ -90,6 +90,7 @@ SPRINGER_DIR = "Springer"                 # TEXTBOOKS_DIR/Springer: Springer dow
 OLD_TEXTBOOK_DIRS = ("_Springer Textbooks", "_Textbooks")   # older places inside the Library
 OLD_SPRINGER_DIR = "_Springer Textbooks"
 CONVERT_TIMEOUT = int(os.environ.get("CONVERT_TIMEOUT", "7200"))  # seconds per book
+TEXT_TIMEOUT = int(os.environ.get("TEXT_TIMEOUT", "900"))        # seconds per RTF/TXT book (native try, then fallback)
 # Springer download names: Author2017_Chapter_Title.pdf (a chapter), 2015_Bookmatter_Title_2.pdf
 # (index/back pages), 2017_Book_Title.pdf (a whole book). Only whole books go in the Library.
 SPRINGER_PART = re.compile(r"_(Chapter|Bookmatter|Frontmatter|ReferenceWorkEntry)_")
@@ -724,13 +725,20 @@ def text_fallback(c, tmp):
     with tempfile.TemporaryDirectory(dir=str(DATA_DIR)) as td:
         src = Path(td) / "book.txt"
         src.write_text(text, encoding="utf-8")
+        # "plain": the default "auto" sniffs for Markdown/Textile and crawls on texts full of
+        # "* * *" scene breaks and underscores (20+ minutes on one book on the NAS).
         cmd = ["ebook-convert", str(src), str(tmp), "--input-encoding", "utf-8",
-               "--paragraph-type", "block", "--chapter-mark", "none"]
+               "--paragraph-type", "block", "--formatting-type", "plain", "--chapter-mark", "none"]
         if c.get("title"):
             cmd += ["--title", str(c["title"])]
         if c.get("author"):
             cmd += ["--authors", str(c["author"])]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=CONVERT_TIMEOUT)
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=TEXT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            if tmp.exists():
+                tmp.unlink()
+            raise RuntimeError(f"text fallback timed out after {TEXT_TIMEOUT // 60} min")
     if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
         if tmp.exists():
             tmp.unlink()
@@ -749,7 +757,8 @@ def do_place(c):
     else:
         # Huge books (complete collections, big manuals) can take well over 30 min on the NAS.
         convert = ["ebook-convert", str(c["path"]), str(tmp)]
-        r = subprocess.run(convert, capture_output=True, text=True, timeout=CONVERT_TIMEOUT)
+        first_timeout = TEXT_TIMEOUT if c["ext"] in TEXT_EXTS else CONVERT_TIMEOUT
+        r = subprocess.run(convert, capture_output=True, text=True, timeout=first_timeout)
         if r.returncode != 0 and "SplitError" in (r.stderr + r.stdout):
             # Calibre couldn't cut an oversized chapter into smaller files; keep it whole.
             if tmp.exists():
