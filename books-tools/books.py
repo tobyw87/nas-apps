@@ -1826,6 +1826,22 @@ def regroup_unswap(author, title):
     return fix_author(m.group(1)), fix_title(author)
 
 
+def regroup_title(title, rel):
+    """Better title from the old middle folder when the metadata one is a stub:
+    "1" -> "Crystal Singer 3 - Crystal Line" (from "McCaffrey, Anne - Crystal Singer 3 - Crystal Line"),
+    "A Boy" -> "A Boy And His God" (from folder "A Boy And His God")."""
+    if len(rel.parts) != 3:
+        return title
+    mid = rel.parts[1]
+    m = re.match(r"^[^,\-]{1,40}, [^,\-]{1,40}? - (.+)$", mid)
+    if m and (len(title) <= 3 or title.isdigit()):
+        return fix_title(m.group(1)) or title
+    if (not m and " - " not in mid and "," not in mid and len(mid) > len(title)
+            and norm(mid).startswith(norm(title))):
+        return mid
+    return title
+
+
 def regroup_conforming(rel):
     """Already Author/Title/<Title - Author>.ext with a "First Last" author folder."""
     return (len(rel.parts) == 3 and fix_author(rel.parts[0]) == rel.parts[0]
@@ -1872,21 +1888,25 @@ def regroup(check_only=False):
             log(f"Read {n} of {len(todo)}...")
         author, title, src = read_meta(path, ext)
         why = f"metadata ({src})"
+        swapped = False
         fixed = unswap(author, title, rel.parts[0])
         if fixed and fixed[0] and fixed[1]:
             author, title = fixed
+            swapped = True
             why = "metadata had author and title swapped"
         if not (author and title):
             fa, ft = filename_meta(path)
             author = author or fix_author(fa)
             title = title or fix_title(ft)
             why = "file name"
+            swapped = True
         if not (author and title):
             check.append((path, "", "", "no author/title found"))
             continue
-        # the author's surname must appear somewhere in the old path, or it is suspicious
+        title = regroup_title(title, rel)
+        # author read from the book's own metadata is trusted; anything guessed must be in the old path
         sur = norm(author.split()[-1])
-        if sur and sur not in norm(str(rel)):
+        if (swapped or src != "epub") and sur and sur not in norm(str(rel)):
             check.append((path, author, title, f"author '{author}' not in the old path"))
             continue
         adir = authors.setdefault(norm(author), safe(author, 80))
