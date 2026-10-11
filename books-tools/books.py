@@ -41,6 +41,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 import zipfile
@@ -616,6 +617,127 @@ def dest_for(c, authors, taken):
         n += 1
 
 
+# ---------------------------------------------------------------- text fallback for RTF/TXT
+
+RTF_TOKEN = re.compile(r"\\([a-z]{1,32})(-?\d{1,10})?[ ]?|\\'([0-9a-f]{2})|\\([^a-z])|([{}])|[\r\n]+|(.)", re.I | re.S)
+RTF_SKIP = {"fonttbl", "colortbl", "datastore", "themedata", "stylesheet", "info", "pict", "object",
+            "xmlnstbl", "listtable", "listoverridetable", "rsidtbl", "generator", "latentstyles",
+            "header", "headerl", "headerr", "headerf", "footer", "footerl", "footerr", "footerf",
+            "fldinst", "private", "revtbl", "filetbl", "pgptbl", "mmathPr", "defchp", "defpap",
+            "operator", "author", "title", "subject", "keywords", "comment", "company", "category"}
+RTF_CHARS = {"par": "\n\n", "sect": "\n\n", "line": "\n", "tab": "\t", "emdash": "\u2014", "endash": "\u2013",
+             "lquote": "\u2018", "rquote": "\u2019", "ldblquote": "\u201c", "rdblquote": "\u201d",
+             "bullet": "\u2022", "emspace": " ", "enspace": " ", "qmspace": " "}
+
+
+def rtf_to_text(data):
+    """Plain text from an RTF that Calibre's reader rejects.
+
+    Layout is lost (that's the price), but the words, paragraphs, accents and quotes survive.
+    Tolerant on purpose: broken groups, odd code pages and stray bytes are skipped, not fatal.
+    """
+    raw = data.decode("latin-1")
+    m = re.search(r"\\ansicpg(\d+)", raw)
+    codepage = f"cp{m.group(1)}" if m else "cp1252"
+    try:
+        "x".encode(codepage)
+    except LookupError:
+        codepage = "cp1252"
+    out, stack, skip_chars, pending = [], [], 0, bytearray()
+    ignore, ucskip, started = False, 1, False
+
+    def flush():
+        if pending:
+            out.append(pending.decode(codepage, errors="replace"))
+            pending.clear()
+
+    for m in RTF_TOKEN.finditer(raw):
+        word, num, hexa, sym, brace, ch = m.groups()
+        if hexa is not None:
+            if skip_chars:
+                skip_chars -= 1
+            elif not ignore:
+                pending.append(int(hexa, 16))
+            continue
+        flush()
+        if brace == "{":
+            stack.append((ignore, ucskip))
+            continue
+        if brace == "}":
+            if stack:
+                ignore, ucskip = stack.pop()
+            continue
+        if word is not None:
+            started = True
+            if word in RTF_SKIP:
+                ignore = True
+            elif word == "uc":
+                ucskip = int(num or 1)
+            elif word == "u" and num is not None and not ignore:
+                n = int(num)
+                code = n + 65536 if n < 0 else n
+                if not 0xF000 <= code <= 0xF8FF:       # symbol-font private-use codes are noise as text
+                    out.append(chr(code))
+                skip_chars = ucskip
+            elif word in RTF_CHARS and not ignore:
+                out.append(RTF_CHARS[word])
+            elif word == "bin" and num:
+                pass
+            continue
+        if sym is not None:
+            if sym == "*":
+                ignore = True
+            elif sym in "\\{}" and not ignore:
+                out.append(sym)
+            elif sym == "~" and not ignore:
+                out.append("\u00a0")
+            elif sym == "_" and not ignore:
+                out.append("\u2011")
+            continue
+        if ch is None:
+            continue                          # bare line break in the file: not content in RTF
+        if skip_chars:
+            skip_chars -= 1
+        elif not ignore and started:
+            out.append(ch)
+    flush()
+    text = "".join(out)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def decode_text(data):
+    for enc in ("utf-8-sig", "cp1252"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            pass
+    return data.decode("latin-1", errors="replace")
+
+
+def text_fallback(c, tmp):
+    """RTF/TXT that Calibre's own readers reject: clean UTF-8 text first, then convert that."""
+    data = Path(c["path"]).read_bytes()
+    text = rtf_to_text(data) if c["ext"] == "rtf" else decode_text(data)
+    if len(text) < 2000:
+        raise RuntimeError(f"text fallback: only {len(text)} characters of text")
+    with tempfile.TemporaryDirectory(dir=str(DATA_DIR)) as td:
+        src = Path(td) / "book.txt"
+        src.write_text(text, encoding="utf-8")
+        cmd = ["ebook-convert", str(src), str(tmp), "--input-encoding", "utf-8",
+               "--paragraph-type", "block", "--chapter-mark", "none"]
+        if c.get("title"):
+            cmd += ["--title", str(c["title"])]
+        if c.get("author"):
+            cmd += ["--authors", str(c["author"])]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=CONVERT_TIMEOUT)
+    if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+        if tmp.exists():
+            tmp.unlink()
+        err = (r.stderr or r.stdout or "").strip().splitlines()
+        raise RuntimeError("text fallback failed: " + (err[-1] if err else f"exit {r.returncode}"))
+
+
 def do_place(c):
     dest = Path(c["dest"])
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -639,7 +761,14 @@ def do_place(c):
                 tmp.unlink()
             err = (r.stderr or r.stdout or "").strip().splitlines()
             hint = " (looks DRM-protected)" if "DRM" in (r.stderr + r.stdout) else ""
-            raise RuntimeError(f"conversion failed{hint}: " + (err[-1] if err else f"exit {r.returncode}"))
+            if c["ext"] in TEXT_EXTS:
+                try:
+                    text_fallback(c, tmp)
+                except Exception as e:
+                    raise RuntimeError(f"conversion failed{hint}: " + (err[-1] if err else f"exit {r.returncode}")
+                                       + f" | {str(e)[-200:]}")
+            else:
+                raise RuntimeError(f"conversion failed{hint}: " + (err[-1] if err else f"exit {r.returncode}"))
     os.replace(tmp, dest)
 
 

@@ -104,6 +104,13 @@ with an existing ComicInfo.xml keeps its other fields and is rewritten to a temp
 and renamed. Changed series folders get a fresh mtime (BookOrbit skips unchanged folders).
 PDFs/EPUBs/CBRs in Manga are left alone.
 
+### RTF / TXT that Calibre rejects
+
+`organize` now falls back for `.rtf`/`.txt` files Calibre can't read ("Exception in token
+processing", odd code pages): the RTF is stripped to plain UTF-8 text (words, paragraphs, accents
+and quotes kept, layout lost) and that is converted to EPUB. To retry the failures:
+`sudo books.sh organize --retry-errors` (dry run), then `organize --apply --retry-errors`.
+
 ### CBR → CBZ
 
     sudo /volume1/docker/books-tools/books.sh cbr2cbz            # dry run: lists the .cbr files
