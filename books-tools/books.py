@@ -1843,7 +1843,7 @@ def regroup_unswap(author, title):
     parts = [x.strip() for x in title.strip().split(" - ")]
     if len(parts) >= 3:                              # "Author - Series 01 - Title": the last part is the title
         new_title = fix_title(parts[-1])
-    elif author == author.lower() and len(author.split()) == 2:   # "wendy kliewer": whoever scanned it
+    elif (author == author.lower() or author == author.upper()) and len(author.split()) == 2:   # "wendy kliewer": whoever scanned it
         new_title = fix_title(parts[1]) if len(parts) == 2 else None
     else:
         new_title = fix_title(author)
