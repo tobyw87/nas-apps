@@ -2144,6 +2144,56 @@ def calibre_fix(library, apply):
         log("Nothing changed. To fix them: books.sh calibre-fix --apply '<library>'")
 
 
+# ---------------------------------------------------------------- authors missing from the metadata
+
+def calibre_authors(library):
+    """Read-only: how many Calibre books have no real author (author == title, junk, one-book 'authors'),
+    and what the original archive paths (state.db) say about each. Writes a CSV."""
+    lib = Path(library)
+    mdb = lib / "metadata.db"
+    if not mdb.exists():
+        sys.exit(f"STOP: {lib} is not a Calibre library (no metadata.db).")
+    cal = sqlite3.connect(f"file:{mdb}?immutable=1", uri=True)
+    rows = cal.execute("""SELECT b.id, b.title, a.name, b.path FROM books b
+        JOIN books_authors_link l ON l.book = b.id JOIN authors a ON a.id = l.author ORDER BY b.id""").fetchall()
+    seen, books = set(), []
+    for i, t, a, path in rows:
+        if i not in seen:
+            seen.add(i)
+            books.append((i, t, a, path))
+    per = {}
+    for _, _, a, _ in books:
+        per[norm(a)] = per.get(norm(a), 0) + 1
+    db = db_open()
+    by_key = {}
+    for r in db.execute("SELECT path, dest FROM files WHERE dest != '' AND status IN ('copy','convert')"):
+        try:
+            rel = Path(r["dest"]).relative_to(LIBRARY_DIR)
+        except ValueError:
+            continue
+        if len(rel.parts) >= 2:
+            by_key.setdefault((norm(rel.parts[0]), norm(rel.parts[1])), []).append(r["path"])
+    bogus = [(i, t, a, path) for i, t, a, path in books
+             if norm(a) == norm(t) or (per[norm(a)] == 1 and not name_ish(a)) or a.casefold() in JUNK_AUTHORS]
+    matched = 0
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out = LOGS_DIR / f"calibre-authors-{stamp}.csv"
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "calibre title", "calibre author", "original path(s) from the archive"])
+        for i, t, a, path in bogus:
+            src = by_key.get((norm(a), norm(t))) or by_key.get((norm(t), norm(t))) or []
+            matched += bool(src)
+            w.writerow([i, t, a, " | ".join(src[:3])])
+    log(f"{len(books)} books; {len(bogus)} look like they have no real author "
+        f"({sum(1 for _, t, a, _ in books if norm(a) == norm(t))} have the title as the author); "
+        f"{matched} of those match a record of their original file")
+    log(f"{len({norm(a) for _, _, a, _ in books})} author folders in total; "
+        f"{sum(1 for v in per.values() if v == 1)} have exactly one book")
+    log(f"Report: {out}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2155,6 +2205,8 @@ def main():
     sub.add_parser("status")
     sub.add_parser("cleanup")
     sub.add_parser("regroup")
+    ca = sub.add_parser("calibre-authors")
+    ca.add_argument("library")
     cf = sub.add_parser("calibre-fix")
     cf.add_argument("library")
     cf.add_argument("--apply", action="store_true")
@@ -2197,6 +2249,8 @@ def main():
         organize(a.apply, a.retry_errors)
     elif a.cmd == "cleanup":
         cleanup()
+    elif a.cmd == "calibre-authors":
+        calibre_authors(a.library)
     elif a.cmd == "calibre-fix":
         calibre_fix(a.library, a.apply)
     elif a.cmd == "converted":
