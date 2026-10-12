@@ -199,3 +199,5 @@ junk, or a one-book "author" that isn't a name), searches Open Library (then Goo
 `data/lookup-cache.json`, so it resumes. `--apply <csv> [--level medium]` sets the authors in Calibre (stop the
 Calibre container first). "high" = the candidate is an author already in the library and clearly the best match, or
 the title names its author; "medium" = clear winner but not already in the library; "low" is never applied.
+
+- `calibre-review <library> [--apply]`: books without a proper author/title are copied (size-checked) to a plain folder, `REVIEW_DIR` (default `/volume1/NAS/Archive/EPUB To Fix`, outside 5_Books), then removed from the Calibre library. Dry run lists them; `metadata.db` is backed up first.

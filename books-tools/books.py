@@ -2527,6 +2527,94 @@ def calibre_lookup_apply(lib, csv_file, level):
     if r.returncode:
         sys.exit(f"calibre-debug failed ({r.returncode})")
 
+CALIBRE_REVIEW_MOVE = r"""
+import sys, csv, os, re
+from calibre.library import db
+lib, folder, rows = sys.argv[-3], sys.argv[-2], sys.argv[-1]
+src = db(lib).new_api
+ids = [int(r["id"]) for r in csv.DictReader(open(rows, encoding="utf-8-sig"))]
+def safe(x):
+    return re.sub(r'[\\/:*?"<>|]+', " ", x or "").strip(" .")[:80] or "untitled"
+moved = failed = 0
+log = open(os.path.join(folder, "_moved.csv"), "a", newline="", encoding="utf-8-sig")
+w = csv.writer(log)
+for n, i in enumerate(ids, 1):
+    try:
+        if not src.has_id(i):
+            continue
+        mi = src.get_metadata(i)
+        title, author = mi.title, " & ".join(mi.authors)
+        written = []
+        for fmt in src.formats(i):
+            path = os.path.join(folder, "%s [%s] (id %d).%s" % (safe(title), safe(author), i, fmt.lower()))
+            with open(path, "wb") as f:
+                src.copy_format_to(i, fmt, f)
+            if os.path.getsize(path) != src.format_metadata(i, fmt)["size"]:
+                raise RuntimeError("copy of %s is the wrong size" % fmt)
+            written.append(path)
+        if not written:
+            raise RuntimeError("book has no files")
+        src.remove_books((i,), permanent=True)
+        for path in written:
+            w.writerow([i, title, author, os.path.basename(path)])
+        log.flush()
+        moved += 1
+    except Exception as e:
+        failed += 1
+        print("FAILED id %s: %s" % (i, e), flush=True)
+    if n % 100 == 0:
+        print("Moved %d of %d..." % (n, len(ids)), flush=True)
+print("Moved %d book(s), %d failed" % (moved, failed))
+log.close()
+src.close()
+"""
+
+
+def calibre_review(library, apply):
+    """Take every book without a proper author/title out of the Calibre library into a plain folder
+    (copied and size-checked first; removed from Calibre only after that)."""
+    lib = Path(library)
+    folder = Path(os.environ.get("REVIEW_DIR") or "/volume1/NAS/Archive/EPUB To Fix")
+    mdb = lib / "metadata.db"
+    if not mdb.exists():
+        sys.exit(f"STOP: {lib} is not a Calibre library (no metadata.db).")
+    if folder.resolve() == lib.resolve() or lib.resolve() in folder.resolve().parents:
+        sys.exit("STOP: the folder must be outside the Calibre library.")
+    cal = sqlite3.connect(f"file:{mdb}?immutable=1", uri=True)
+    seen, books = set(), []
+    for i, t, a in cal.execute("""SELECT b.id, b.title, a.name FROM books b JOIN books_authors_link l ON l.book=b.id
+                                  JOIN authors a ON a.id=l.author ORDER BY b.id"""):
+        if i not in seen:
+            seen.add(i)
+            books.append((i, t, a))
+    per = {}
+    for _, _, a in books:
+        per[norm(a)] = per.get(norm(a), 0) + 1
+    bad = [(i, t, a) for i, t, a in books if no_real_author(a, t, per) or title_is_junk(t)]
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    out = LOGS_DIR / f"calibre-review-{stamp}.csv"
+    with open(out, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "title", "author"])
+        w.writerows(bad)
+    log(f"{len(books)} books; {len(bad)} have no proper author/title and would move to {folder}")
+    log(f"List: {out}")
+    if not apply:
+        log("Nothing changed. Check the list, back up metadata.db, stop the Calibre container, then add --apply.")
+        return
+    folder.mkdir(parents=True, exist_ok=True)
+    backup = lib / f"metadata.db.before-review-{stamp}"
+    shutil.copy2(mdb, backup)
+    log(f"Backed up the database to {backup}")
+    script = DATA_DIR / "calibre-review-move.py"
+    script.write_text(CALIBRE_REVIEW_MOVE, encoding="utf-8")
+    r = subprocess.run(["calibre-debug", "-e", str(script), "--", str(lib), str(folder), str(out)])
+    if r.returncode:
+        sys.exit(f"calibre-debug failed ({r.returncode})")
+    log("Done. Now run: calibredb backup_metadata --all, then rescan the library in BookOrbit.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2543,6 +2631,9 @@ def main():
     cl.add_argument("--apply", metavar="REPORT_CSV")
     cl.add_argument("--level", choices=["high", "medium"], default="high")
     cl.add_argument("--limit", type=int)
+    cr = sub.add_parser("calibre-review")
+    cr.add_argument("library")
+    cr.add_argument("--apply", action="store_true")
     ca = sub.add_parser("calibre-authors")
     ca.add_argument("library")
     cf = sub.add_parser("calibre-fix")
@@ -2589,6 +2680,8 @@ def main():
         cleanup()
     elif a.cmd == "calibre-lookup":
         calibre_lookup(a.library, a.apply, a.level, a.limit)
+    elif a.cmd == "calibre-review":
+        calibre_review(a.library, a.apply)
     elif a.cmd == "calibre-authors":
         calibre_authors(a.library)
     elif a.cmd == "calibre-fix":

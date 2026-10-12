@@ -20,4 +20,10 @@ if [ "$1" = manga ]; then
   # shellcheck disable=SC2086
   exec docker compose run --rm -T $VOLS -e MANGA_SOURCES="$LIST" books "$@"
 fi
+if [ "$1" = calibre-review ]; then
+  # the plain folder for books without a proper author/title (outside 5_Books, so BookOrbit never sees it)
+  REVIEW_DIR="${REVIEW_DIR:-/volume1/NAS/Archive/EPUB To Fix}"
+  mkdir -p "$REVIEW_DIR"
+  exec docker compose run --rm -T -v "$REVIEW_DIR:$REVIEW_DIR" -e REVIEW_DIR="$REVIEW_DIR" books "$@"
+fi
 exec docker compose run --rm -T books "$@"
