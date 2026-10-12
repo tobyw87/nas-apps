@@ -2414,20 +2414,27 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
             tt = re.sub(r"^microsoft word\s*-\s*", "", clean_text(t or ""), flags=re.I)
             tt = re.sub(r"\.(txt|doc|rtf|lit|epub|html?)$", "", re.sub(r",(?=\S)", ", ", tt), flags=re.I)
             m = NAME_FORM.match(tt)
+            a_junk = (not a_title) or bool(re.search(r"\d", lookup_query(a_title)[0])) or \
+                a_title.casefold().strip(". ") in (JUNK_AUTHORS | EXTRA_JUNK_AUTHORS | {"unknown", "me", "user"})
+            if m and m.group(1).partition(", ")[2].strip().casefold() in ("the", "a", "an"):
+                m = None                                              # "Coelura, The" is a title, not a name
             if m and not title_junk:
                 last, _, first = m.group(1).partition(", ")
                 if name_ish(last) and name_ish(first):
                     parts = [x.strip() for x in tt.split(" - ")]
-                    stub = (a_title == a_title.lower() and len(a_title.split()) <= 2) or len(a_title) < 3 or \
-                           (a_title.isupper() and len(a_title) <= 4) or a_title.casefold() in EXTRA_JUNK_AUTHORS
+                    stub = a_junk or (a_title == a_title.lower() and len(a_title.split()) <= 2) or len(a_title) < 3 or \
+                           (a_title.isupper() and len(a_title) <= 4)
                     guess = stub and len(parts) >= 2                              # the title is the last part: a guess
                     new_t = lookup_query(parts[-1])[0] if guess else lookup_query(a_title)[0]
-                    if new_t and len(new_t) >= 3:
+                    if stub and len(parts) < 2:
+                        local = (None, "low", "author known but no usable title")
+                    elif new_t and len(new_t) >= 3:
                         local = (fix_author(m.group(1)), "medium" if (guess or len(parts) >= 3) else "high",
                                  "author written in the title field" + ("; title taken from the title field" if guess else ""))
                         res_title = new_t
             elif not title_junk and not truncated and a_title and len(t.split()) >= 2 and name_ish(t.strip()) and not t.isupper() and norm(t) != norm(a_title) and \
-                    not re.match(r"(?:the|a|an)\s", t, re.I) and not name_ish(a_title) and len(a_title) >= 3:
+                    not re.match(r"(?:the|a|an)\s", t, re.I) and not a_junk and not name_ish(a_title) and len(a_title) >= 3 and \
+                    not re.search(r"[,&;]|\band\b|\|", t) and len(t.split()[-1].strip(".")) >= 3:
                 local = (dot_initials(fix_author(t) or t), "medium", "author is in the title field, title in the author field")
                 res_title = lookup_query(a_title)[0]
             if local:
@@ -2465,12 +2472,17 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
                 else:
                     cased = next((d["title"] for d in cache[q] if norm(d["title"].replace("&", " and ")) == norm(q.replace("&", " and "))), None)
                     res_title = pick_title(q, cased)
+            res_title = re.sub(r"\s*\([^)]*$", "", res_title).strip()          # "Quag Keep (AD" -> "Quag Keep"
+            if conf != "skip" and (title_is_junk(res_title) or res_title.casefold() == "unknown"):
+                author, conf, note = None, "low", "no usable title"
             if author and norm(author) == norm(res_title):
                 author, conf, note = None, "low", "the proposed author is the title"
             if author:
                 author = dot_initials(author)
             if author:
                 author = spelling.get(norm(author)) or spelling.get(norm(" ".join(author.split()[-1:] + author.split()[:-1]))) or author
+                if "|" in author:
+                    author = fix_author(author.replace("|", ",")) or author
             counts[conf] = counts.get(conf, 0) + 1
             w.writerow([i, t, a, author or "", res_title, conf, note])
             if n % 100 == 0:
