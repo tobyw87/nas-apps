@@ -1815,15 +1815,37 @@ def tag_rewrite(path, xml):
 NAME_FORM = re.compile(r"^([^,\-]{1,40}, [^,\-]{1,40}?)(?:\s+-\s+.+)?$")   # "Cherryh, C J" (+ " - Knight 1")
 
 
+NAME_PARTICLES = {"de", "van", "von", "der", "den", "la", "le", "di", "da", "du", "bin", "al", "ben", "el", "y"}
+
+
+def name_ish(s):
+    """Looks like (part of) a person's name: 1-4 capitalized words/initials, no digits or punctuation."""
+    words = s.split()
+    return (1 <= len(words) <= 4 and not re.search(r"[\d:;()\[\]]", s)
+            and all(w[:1].isupper() or w in NAME_PARTICLES for w in words))
+
+
 def regroup_unswap(author, title):
     """Old-archive books have author and title swapped in their metadata ("Cherryh, C J" is the
-    title and "The Dreamstone" the author). Returns (real author, real title), or None if fine."""
-    if not (author and title) or "," in author:
+    title and "The Dreamstone" the author). Returns (real author, real title), or None if fine.
+    Both halves of "Last, First" must look like a name, so "Wounds, Book 2" is left alone."""
+    if not (author and title) or re.search(r"[;()\[\]]|,", author):
         return None
     m = NAME_FORM.match(title.strip())
     if not m:
         return None
-    return fix_author(m.group(1)), fix_title(author)
+    last, _, first = m.group(1).partition(", ")
+    if not (name_ish(last) and name_ish(first)):
+        return None
+    new_author = fix_author(m.group(1))
+    rest = title.strip().split(" - ", 1)[1].strip() if " - " in title else ""
+    if author == author.lower() and len(author.split()) == 2:     # "wendy kliewer": whoever scanned it
+        new_title = fix_title(rest)
+    else:
+        new_title = fix_title(author)
+    if not (new_author and new_title) or norm(new_author) == norm(new_title):
+        return None
+    return new_author, new_title
 
 
 def regroup_title(title, rel):
