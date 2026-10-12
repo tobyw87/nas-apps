@@ -10,7 +10,6 @@ services:
     container_name: calibre
     image: lscr.io/linuxserver/calibre:latest
     restart: "no"
-    init: true
     security_opt:
       - seccomp:unconfined
     shm_size: 1gb
