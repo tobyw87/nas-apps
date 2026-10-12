@@ -44,6 +44,9 @@ import sys
 import tempfile
 import time
 import unicodedata
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -2194,6 +2197,205 @@ def calibre_authors(library):
     log(f"Report: {out}")
 
 
+# ---------------------------------------------------------------- look up missing authors online
+
+LOOKUP_UA = "books-tools/1.0 (personal ebook library)"
+LOOKUP_JUNK = {"index", "do", "a", "x", "v1", "contents", "prologue", "chapter", "default", "unknown", "untitled",
+               "title", "book", "one", "the", "part one", "copyright", "version 1", "scanned by highroller"}
+
+
+def http_json(url, retries=4, pause=1.0):
+    """GET json politely: back off on 429/5xx, give up (None) on anything else."""
+    for n in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": LOOKUP_UA})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504):
+                time.sleep(pause * (3 ** n))
+                continue
+            return None
+        except Exception:
+            time.sleep(pause * (2 ** n))
+    return None
+
+
+def lookup_query(title):
+    """The part of a messy title worth searching for, plus an author if the title names one."""
+    t = clean_text(re.sub(r"\.(txt|doc|rtf|lit|epub|html?)$", "", title or "", flags=re.I))
+    t = re.sub(r"\s*[\[(](?:v?\d[\d.]*|uc|ocr|html|txt|lit|ebook|b|rtf)[\])]", "", t, flags=re.I).strip()
+    by = re.match(r"^(.*?)\s+by\s+([A-Z][\w.' -]{3,40})$", t)
+    author = None
+    if by:
+        t, author = by.group(1).strip(), by.group(2).strip()
+    parts = [x.strip() for x in t.split(" - ") if x.strip()]
+    if len(parts) >= 2:
+        t = parts[-1]
+    t = re.sub(r"^\d{1,2}\s*[-.:]\s*", "", t)                 # "03 - Title"
+    t = re.sub(r"\s+v\d+(\.\d+)?$", "", t).strip(" :.-")
+    return t, author
+
+
+def ol_search(q, fetch=None):
+    fetch = fetch or http_json
+    d = fetch("https://openlibrary.org/search.json?" + urllib.parse.urlencode(
+        {"title": q, "limit": 10, "fields": "title,author_name,edition_count"}))
+    out = []
+    for x in (d or {}).get("docs", []):
+        if x.get("author_name"):
+            out.append({"title": x.get("title", ""), "author": x["author_name"][0], "w": int(x.get("edition_count") or 1)})
+    return out, d is not None
+
+
+def gb_search(q, fetch=None):
+    fetch = fetch or http_json
+    d = fetch("https://www.googleapis.com/books/v1/volumes?" + urllib.parse.urlencode(
+        {"q": f'intitle:"{q}"', "maxResults": 8, "printType": "books"}))
+    out = []
+    for x in (d or {}).get("items", []):
+        v = x.get("volumeInfo", {})
+        if v.get("authors"):
+            out.append({"title": v.get("title", ""), "author": v["authors"][0], "w": 1})
+    return out, d is not None
+
+
+def lookup_choose(q, docs, known):
+    """-> (author or None, confidence 'high'|'medium'|'low', note). known: norm(author) -> spelling in the library."""
+    amp = lambda x: norm(x.replace("&", " and "))
+    qn = amp(q)
+    exact = [d for d in docs if amp(d["title"]) == qn or amp(d["title"].split(":")[0]) == qn]
+    if not exact:
+        return None, "low", "no exact title match"
+    weight = {}
+    for d in exact:
+        a = fix_author(d["author"]) or d["author"]
+        weight[a] = weight.get(a, 0) + d["w"]
+    def score(a):
+        n = norm(a)
+        w = weight[a]
+        if n in known or norm(" ".join(a.split()[-1:] + a.split()[:-1])) in known:
+            w *= 3
+        return w
+    top = max(weight, key=score)
+    total = sum(score(a) for a in weight)
+    share = score(top) / total if total else 0
+    in_lib = norm(top) in known
+    alts = ", ".join(f"{a} ({weight[a]})" for a in sorted(weight, key=score, reverse=True)[:3])
+    if in_lib and share >= 0.5:
+        return top, "high", alts
+    if share >= 0.7 and sum(weight.values()) >= 3:
+        return top, "medium", alts
+    return top, "low", alts
+
+
+def calibre_lookup(library, apply_csv=None, level="high", limit=None):
+    lib = Path(library)
+    mdb = lib / "metadata.db"
+    if not mdb.exists():
+        sys.exit(f"STOP: {lib} is not a Calibre library (no metadata.db).")
+    if apply_csv:
+        return calibre_lookup_apply(lib, Path(apply_csv), level)
+    cal = sqlite3.connect(f"file:{mdb}?immutable=1", uri=True)
+    seen, books = set(), []
+    for i, t, a in cal.execute("""SELECT b.id, b.title, a.name FROM books b JOIN books_authors_link l ON l.book=b.id
+                                  JOIN authors a ON a.id=l.author ORDER BY b.id"""):
+        if i not in seen:
+            seen.add(i)
+            books.append((i, t, a))
+    per = {}
+    for _, _, a in books:
+        per[norm(a)] = per.get(norm(a), 0) + 1
+    bogus = [(i, t, a) for i, t, a in books
+             if norm(a) == norm(t) or (per[norm(a)] == 1 and not name_ish(a)) or a.casefold() in JUNK_AUTHORS]
+    bogus_names = {norm(a) for _, _, a in bogus}
+    known = {k: a for _, _, a in books for k in [norm(a)] if per[k] >= 3 and k not in bogus_names}
+    spelling = {norm(a): a for _, _, a in books if norm(a) in known}
+    cache_file = DATA_DIR / "lookup-cache.json"
+    try:
+        cache = json.loads(cache_file.read_text("utf-8"))
+    except Exception:
+        cache = {}
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    out = LOGS_DIR / f"calibre-lookup-{stamp}.csv"
+    counts, fails = {}, 0
+    todo = bogus[:limit] if limit else bogus
+    log(f"{len(books)} books, {len(bogus)} without a usable author; looking up {len(todo)}")
+    with open(out, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "current title", "current author", "proposed author", "proposed title", "confidence", "alternatives"])
+        for n, (i, t, a) in enumerate(todo, 1):
+            q, by = lookup_query(t)
+            if len(q) < 4 or q.casefold() in LOOKUP_JUNK:
+                res = (None, "skip", "title too short or generic")
+            elif by and fix_author(by):
+                res = (fix_author(by), "high", "author named in the title")
+            else:
+                if q not in cache:
+                    docs, ok = ol_search(q)
+                    if not ok or not any(norm(d["title"].replace("&", " and ")) == norm(q.replace("&", " and ")) for d in docs):
+                        docs2, ok2 = gb_search(q)
+                        docs = docs + docs2
+                        ok = ok or ok2
+                    if not ok:
+                        fails += 1
+                        if fails >= 15:
+                            sys.exit("STOP: the lookup services keep failing (rate limit or no internet). Run again later; "
+                                     "answers so far are cached.")
+                        continue
+                    cache[q] = docs
+                    if len(cache) % 25 == 0:
+                        cache_file.write_text(json.dumps(cache), "utf-8")
+                    time.sleep(0.7)
+                res = lookup_choose(q, cache[q], known)
+            author, conf, note = res
+            if author:
+                author = spelling.get(norm(author)) or spelling.get(norm(" ".join(author.split()[-1:] + author.split()[:-1]))) or author
+            counts[conf] = counts.get(conf, 0) + 1
+            w.writerow([i, t, a, author or "", q, conf, note])
+            if n % 100 == 0:
+                log(f"Looked up {n} of {len(todo)}...")
+    cache_file.write_text(json.dumps(cache), "utf-8")
+    log("Done - " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+    log(f"Report: {out}")
+    log("Nothing changed. Check it, then apply with: books.sh calibre-lookup <library> --apply <report.csv> [--level medium]")
+
+
+CALIBRE_LOOKUP_APPLY = r"""
+import sys, csv
+from calibre.library import db
+lib, rows = sys.argv[-2], sys.argv[-1]
+d = db(lib).new_api
+n = 0
+for line in csv.DictReader(open(rows, encoding="utf-8-sig")):
+    i = int(line["id"])
+    d.set_field("authors", {i: (line["proposed author"],)})
+    d.set_field("title", {i: line["proposed title"]})
+    n += 1
+    if n % 500 == 0:
+        print("Fixed %d..." % n, flush=True)
+print("Fixed %d book(s)" % n)
+d.close()
+"""
+
+
+def calibre_lookup_apply(lib, csv_file, level):
+    allowed = {"high": {"high"}, "medium": {"high", "medium"}}[level]
+    rows = [r for r in csv.DictReader(open(csv_file, encoding="utf-8-sig"))
+            if r["confidence"] in allowed and r["proposed author"] and r["proposed title"]]
+    sel = DATA_DIR / "lookup-apply.csv"
+    with open(sel, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=["id", "proposed author", "proposed title"], extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    script = DATA_DIR / "calibre-lookup-apply.py"
+    script.write_text(CALIBRE_LOOKUP_APPLY, encoding="utf-8")
+    log(f"Applying {len(rows)} row(s) at confidence {level} or better")
+    r = subprocess.run(["calibre-debug", "-e", str(script), "--", str(lib), str(sel)])
+    if r.returncode:
+        sys.exit(f"calibre-debug failed ({r.returncode})")
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2205,6 +2407,11 @@ def main():
     sub.add_parser("status")
     sub.add_parser("cleanup")
     sub.add_parser("regroup")
+    cl = sub.add_parser("calibre-lookup")
+    cl.add_argument("library")
+    cl.add_argument("--apply", metavar="REPORT_CSV")
+    cl.add_argument("--level", choices=["high", "medium"], default="high")
+    cl.add_argument("--limit", type=int)
     ca = sub.add_parser("calibre-authors")
     ca.add_argument("library")
     cf = sub.add_parser("calibre-fix")
@@ -2249,6 +2456,8 @@ def main():
         organize(a.apply, a.retry_errors)
     elif a.cmd == "cleanup":
         cleanup()
+    elif a.cmd == "calibre-lookup":
+        calibre_lookup(a.library, a.apply, a.level, a.limit)
     elif a.cmd == "calibre-authors":
         calibre_authors(a.library)
     elif a.cmd == "calibre-fix":

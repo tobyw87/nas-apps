@@ -190,3 +190,12 @@ nothing: apply the plan with `cleanup-apply.sh`. The unconverted originals stay 
 archive stored "Last, First" as the title) and sets the right ones; Calibre renames the book folders itself.
 Dry run writes `calibre-fix-<stamp>.csv`. Stop the Calibre container first (one process per library).
 Authors with 4+ books are never touched.
+
+## calibre-lookup (find missing authors online)
+
+`books.sh calibre-lookup <library> [--limit N]` takes the Calibre books with no usable author (author == title,
+junk, or a one-book "author" that isn't a name), searches Open Library (then Google Books) by title and writes
+`calibre-lookup-<stamp>.csv` with a proposed author, a confidence and the alternatives. Results are cached in
+`data/lookup-cache.json`, so it resumes. `--apply <csv> [--level medium]` sets the authors in Calibre (stop the
+Calibre container first). "high" = the candidate is an author already in the library and clearly the best match, or
+the title names its author; "medium" = clear winner but not already in the library; "low" is never applied.
