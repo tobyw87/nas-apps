@@ -4,7 +4,7 @@ Calibre desktop in the browser, to build the EPUB library. Calibre's own layout 
 `Author/Title (id)/Title - Author.epub` plus `metadata.db`, which is what BookOrbit then reads.
 
 Install (on the NAS): copy this folder to `/volume1/docker/calibre`, then
-`sudo ./setup.sh && sudo docker compose up -d` and open `http://<nas-ip>:8085`. Stop it with
+`sudo ./setup.sh && sudo docker compose up -d` and open `https://<nas-ip>:8185 (self-signed certificate: accept the warning)`. Stop it with
 `sudo docker compose down` when you're not using it (~1 GB RAM).
 
 Plan: build a **new** Calibre library at `5_Books/EPUB Archive New` (in the GUI: Calibre library →

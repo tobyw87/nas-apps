@@ -22,7 +22,7 @@ services:
       CUSTOM_USER: ${CALIBRE_USER:-}
       PASSWORD: ${CALIBRE_PASSWORD:-}
     ports:
-      - "${CALIBRE_HTTP_PORT:-8085}:8080"     # desktop GUI: http://<nas>:8085
+      - "${CALIBRE_HTTP_PORT:-8185}:3001"     # desktop GUI, HTTPS only: https://<nas>:8185 (self-signed cert)
       - "${CALIBRE_CONTENT_PORT:-8086}:8081"  # Calibre content server (optional, off until enabled in Calibre)
     volumes:
       - ./config:/config

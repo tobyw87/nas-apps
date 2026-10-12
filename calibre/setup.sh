@@ -19,4 +19,4 @@ set -a; . ./.env; set +a
 if netstat -tln 2>/dev/null | grep -qE ":($CALIBRE_HTTP_PORT|$CALIBRE_CONTENT_PORT) "; then
   echo "WARNING: port $CALIBRE_HTTP_PORT or $CALIBRE_CONTENT_PORT is in use. Change it in .env."
 fi
-echo "Next: sudo docker compose up -d   then open http://<nas-ip>:$CALIBRE_HTTP_PORT"
+echo "Next: sudo docker compose up -d   then open https://<nas-ip>:$CALIBRE_HTTP_PORT"
