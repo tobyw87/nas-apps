@@ -1815,6 +1815,9 @@ def tag_rewrite(path, xml):
 NAME_FORM = re.compile(r"^([^,\-]{1,40}, [^,\-]{1,40}?)(?:\s+-\s+.+)?$")   # "Cherryh, C J" (+ " - Knight 1")
 
 
+AUTHOR_FIRST = re.compile(r"^(?:\(e?book\)\s*)?([A-Z][\w.'-]*(?:\s+[A-Z][\w.'-]*){0,3})\s+-\s+(.+)$")   # "Anne McCaffrey - Pern07 Title"
+
+
 NAME_PARTICLES = {"de", "van", "von", "der", "den", "la", "le", "di", "da", "du", "bin", "al", "ben", "el", "y"}
 
 
@@ -2048,14 +2051,36 @@ rows = []
 for i in ids:
     a = d.field_for("authors", i) or ()
     per_author.setdefault(books.norm(a[0]) if a else "", []).append(i)
+def fix_one(a0, t, n_books, canon_names):
+    t = re.sub(r",(?=\S)", ", ", t)                         # "Williams,Tad - X" -> "Williams, Tad - X"
+    if len(per_author[books.norm(a0)]) < 4 or " - " in t:    # a real author has many books
+        fixed = books.regroup_unswap(a0, t)
+        if fixed and fixed[0] and fixed[1]:
+            return fixed
+    m = books.AUTHOR_FIRST.match(t)                          # "Anne McCaffrey - Pern07 Smallest Dragonboy"
+    if m and n_books <= 3 and books.name_ish(m.group(1)):
+        name = canon_names.get(books.norm(m.group(1)))
+        if not name:                                         # "Anthony Piers": try the other order
+            w = m.group(1).split()
+            name = canon_names.get(books.norm(" ".join(w[1:] + w[:1])))
+        if name:
+            parts = [x.strip() for x in m.group(2).split(" - ")]
+            nt = books.fix_title(parts[-1]) if len(parts) >= 2 else books.fix_title(a0)
+            if nt and books.norm(nt) != books.norm(name):
+                return name, nt
+    return None
+canon_names = {}                                             # real authors: 3+ books
+for k, v in per_author.items():
+    if len(v) >= 3:
+        canon_names[k] = d.field_for("authors", v[0])[0]
 flagged = {}
 for i in ids:
     a = d.field_for("authors", i) or ()
     t = d.field_for("title", i) or ""
-    if not a or len(per_author[books.norm(a[0])]) >= 4:      # a real author has many books
+    if not a:
         continue
-    fixed = books.regroup_unswap(a[0], t)
-    if fixed and fixed[0] and fixed[1]:
+    fixed = fix_one(a[0], t, len(per_author[books.norm(a[0])]), canon_names)
+    if fixed:
         flagged[i] = (t, a[0], fixed)
 canon = {}                                                   # spelling already used by the other books
 for i in ids:
