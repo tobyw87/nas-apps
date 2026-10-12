@@ -1837,10 +1837,14 @@ def regroup_unswap(author, title):
     last, _, first = m.group(1).partition(", ")
     if not (name_ish(last) and name_ish(first)):
         return None
+    if re.fullmatch(r"(?:[A-Z]\.\s?)+[A-Z][\w'-]+", author.strip()):
+        return None                                  # "P. N. Elrod" is a person, so this is a real book
     new_author = fix_author(m.group(1))
-    rest = title.strip().split(" - ", 1)[1].strip() if " - " in title else ""
-    if author == author.lower() and len(author.split()) == 2:     # "wendy kliewer": whoever scanned it
-        new_title = fix_title(rest)
+    parts = [x.strip() for x in title.strip().split(" - ")]
+    if len(parts) >= 3:                              # "Author - Series 01 - Title": the last part is the title
+        new_title = fix_title(parts[-1])
+    elif author == author.lower() and len(author.split()) == 2:   # "wendy kliewer": whoever scanned it
+        new_title = fix_title(parts[1]) if len(parts) == 2 else None
     else:
         new_title = fix_title(author)
     if not (new_author and new_title) or norm(new_author) == norm(new_title):
@@ -2032,7 +2036,7 @@ def converted(formats=None):
 # ---------------------------------------------------------------- fix swapped metadata in a Calibre library
 
 CALIBRE_FIX_SCRIPT = r"""
-import sys, csv, os
+import sys, csv, os, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[-4])))
 import books
 from calibre.library import db
@@ -2044,6 +2048,7 @@ rows = []
 for i in ids:
     a = d.field_for("authors", i) or ()
     per_author.setdefault(books.norm(a[0]) if a else "", []).append(i)
+flagged = {}
 for i in ids:
     a = d.field_for("authors", i) or ()
     t = d.field_for("title", i) or ""
@@ -2051,7 +2056,19 @@ for i in ids:
         continue
     fixed = books.regroup_unswap(a[0], t)
     if fixed and fixed[0] and fixed[1]:
-        rows.append((i, t, a[0], fixed[1], fixed[0]))
+        flagged[i] = (t, a[0], fixed)
+canon = {}                                                   # spelling already used by the other books
+for i in ids:
+    if i not in flagged:
+        for a in d.field_for("authors", i) or ():
+            canon.setdefault(books.norm(a), {}).setdefault(a, 0)
+            canon[books.norm(a)][a] += 1
+def spell(a):
+    if books.norm(a) in canon:
+        return max(canon[books.norm(a)].items(), key=lambda x: x[1])[0]
+    return re.sub(r"\b([A-Z])\b(?!\.)", r"\1.", a)            # "Sheri S Tepper" -> "Sheri S. Tepper"
+for i, (t, a0, fixed) in flagged.items():
+    rows.append((i, t, a0, fixed[1], spell(fixed[0])))
 with open(report, "w", newline="", encoding="utf-8-sig") as f:
     w = csv.writer(f)
     w.writerow(["id", "old title", "old author", "new title", "new author"])
