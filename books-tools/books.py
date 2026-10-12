@@ -2147,6 +2147,29 @@ def calibre_fix(library, apply):
         log("Nothing changed. To fix them: books.sh calibre-fix --apply '<library>'")
 
 
+EXTRA_JUNK_AUTHORS = {"anonymous", "anon", "various", "various authors", "none", "n/a", "na", "user", "scanned", "ebook",
+                      "e-book", "default", "author", "a", "the", "index", "contents", "preface", "version", "scan"}
+
+
+def no_real_author(a, t, per):
+    """True when a Calibre 'author' is really the title, a junk word, a scanner's name or a stub."""
+    n = norm(a)
+    if n == norm(t) or a.casefold() in JUNK_AUTHORS or a.casefold().strip(". ") in EXTRA_JUNK_AUTHORS:
+        return True
+    if len(re.sub(r"\W", "", a)) <= 2 or a.lstrip()[:1] in "_.([<{-":
+        return True
+    if re.search(r"\d", a) and not re.search(r"\b(?:[IVX]+|\d+(?:st|nd|rd|th))\b", a):   # "DTC 136", "6 X H"
+        return True
+    if title_is_junk(t) and per.get(n, 0) <= 2:       # title "index"/"do": the 'author' is probably the real title
+        return True
+    return per.get(n, 0) == 1 and not name_ish(a)
+
+
+def title_is_junk(t):
+    q, _ = lookup_query(t)
+    return len(q) < 4 or q.casefold() in LOOKUP_JUNK or q.isdigit()
+
+
 # ---------------------------------------------------------------- authors missing from the metadata
 
 def calibre_authors(library):
@@ -2176,8 +2199,7 @@ def calibre_authors(library):
             continue
         if len(rel.parts) >= 2:
             by_key.setdefault((norm(rel.parts[0]), norm(rel.parts[1])), []).append(r["path"])
-    bogus = [(i, t, a, path) for i, t, a, path in books
-             if norm(a) == norm(t) or (per[norm(a)] == 1 and not name_ish(a)) or a.casefold() in JUNK_AUTHORS]
+    bogus = [(i, t, a, path) for i, t, a, path in books if no_real_author(a, t, per)]
     matched = 0
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = LOGS_DIR / f"calibre-authors-{stamp}.csv"
@@ -2306,8 +2328,7 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
     per = {}
     for _, _, a in books:
         per[norm(a)] = per.get(norm(a), 0) + 1
-    bogus = [(i, t, a) for i, t, a in books
-             if norm(a) == norm(t) or (per[norm(a)] == 1 and not name_ish(a)) or a.casefold() in JUNK_AUTHORS]
+    bogus = [(i, t, a) for i, t, a in books if no_real_author(a, t, per)]
     bogus_names = {norm(a) for _, _, a in bogus}
     known = {k: a for _, _, a in books for k in [norm(a)] if per[k] >= 3 and k not in bogus_names}
     spelling = {norm(a): a for _, _, a in books if norm(a) in known}
@@ -2327,7 +2348,9 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
         w.writerow(["id", "current title", "current author", "proposed author", "proposed title", "confidence", "alternatives"])
         for n, (i, t, a) in enumerate(todo, 1):
             q, by = lookup_query(t)
-            if len(q) < 4 or q.casefold() in LOOKUP_JUNK:
+            if title_is_junk(t):                       # the real title is probably what Calibre filed as the author
+                q, by = lookup_query(a)
+            if len(q) < 4 or q.casefold() in LOOKUP_JUNK or q.isdigit():
                 res = (None, "skip", "title too short or generic")
             elif by and fix_author(by):
                 res = (fix_author(by), "high", "author named in the title")
