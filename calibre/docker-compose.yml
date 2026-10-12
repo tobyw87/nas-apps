@@ -1,0 +1,30 @@
+# Calibre desktop in the browser (linuxserver/calibre). Used to build and manage the EPUB library:
+# Calibre files every book as Author/Title (id)/Title - Author.epub and keeps its metadata in
+# metadata.db. Only 5_Books is mounted (as /books); the GUI is on the LAN only.
+# Start it when you want to work in it and stop it again (it uses ~1 GB RAM):
+#   sudo docker compose up -d      /      sudo docker compose down
+name: calibre
+
+services:
+  calibre:
+    container_name: calibre
+    image: lscr.io/linuxserver/calibre:latest
+    restart: "no"
+    init: true
+    security_opt:
+      - seccomp:unconfined
+    shm_size: 1gb
+    mem_limit: ${CALIBRE_MEM_LIMIT:-1500m}
+    environment:
+      PUID: ${PUID:?required}
+      PGID: ${PGID:?required}
+      TZ: ${TZ:-America/Chicago}
+      # CUSTOM_USER / PASSWORD protect the GUI (set both in .env if you want a login).
+      CUSTOM_USER: ${CALIBRE_USER:-}
+      PASSWORD: ${CALIBRE_PASSWORD:-}
+    ports:
+      - "${CALIBRE_HTTP_PORT:-8085}:8080"     # desktop GUI: http://<nas>:8085
+      - "${CALIBRE_CONTENT_PORT:-8086}:8081"  # Calibre content server (optional, off until enabled in Calibre)
+    volumes:
+      - ./config:/config
+      - "${BOOKS_DIR:-/volume1/NAS/Archive/5_Books}:/books"
