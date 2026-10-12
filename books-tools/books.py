@@ -2309,6 +2309,21 @@ def gb_search(q, fetch=None):
     return out, d is not None
 
 
+SMALL_WORDS = {"of", "the", "a", "an", "and", "in", "on", "at", "to", "for", "from", "by", "with", "or", "but", "vs"}
+
+
+def smart_title(s):
+    words = s.lower().split()
+    return " ".join(w if (i and w in SMALL_WORDS) else w[:1].upper() + w[1:] for i, w in enumerate(words))
+
+
+def pick_title(q, cased):
+    """Keep our capitalization unless it is ALL CAPS or all lowercase; then borrow the catalogue's (or tidy ours)."""
+    if q.isupper() or q.islower():
+        return cased if cased and not (cased.isupper() or cased.islower()) else smart_title(q)
+    return q
+
+
 def lookup_choose(q, docs, known):
     """-> (author or None, confidence 'high'|'medium'|'low', note). known: norm(author) -> spelling in the library."""
     amp = lambda x: norm(x.replace("&", " and "))
@@ -2320,6 +2335,17 @@ def lookup_choose(q, docs, known):
     for d in exact:
         a = fix_author(d["author"]) or d["author"]
         weight[a] = weight.get(a, 0) + d["w"]
+    import difflib
+    names = sorted(weight, key=lambda x: -weight[x])           # "Poul Anderson" / "Paul Anderson": one author
+    merged = {}
+    for a in names:
+        home = next((m for m in merged if difflib.SequenceMatcher(None, norm(a), norm(m)).ratio() >= 0.92), None)
+        if home is None:
+            merged[a] = weight[a]
+        else:
+            lib = a if norm(a) in known and norm(home) not in known else home
+            merged[lib] = merged.pop(home) + weight[a]
+    weight = merged
     def score(a):
         n = norm(a)
         w = weight[a]
@@ -2387,13 +2413,17 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
                 last, _, first = m.group(1).partition(", ")
                 if name_ish(last) and name_ish(first):
                     parts = [x.strip() for x in tt.split(" - ")]
-                    stub = a_title == a_title.lower() and len(a_title.split()) <= 2          # "verdell": a scanner's handle
-                    new_t = lookup_query(parts[-1])[0] if (len(parts) >= 3 or (stub and len(parts) >= 2)) else lookup_query(a_title)[0]
+                    stub = (a_title == a_title.lower() and len(a_title.split()) <= 2) or len(a_title) < 3 or \
+                           (a_title.isupper() and len(a_title) <= 4) or a_title.casefold() in EXTRA_JUNK_AUTHORS
+                    guess = len(parts) >= 3 or (stub and len(parts) >= 2)        # the title is the last part: a guess
+                    new_t = lookup_query(parts[-1])[0] if guess else lookup_query(a_title)[0]
                     if new_t and len(new_t) >= 3:
-                        local = (fix_author(m.group(1)), "high", "author written in the title field")
+                        local = (fix_author(m.group(1)), "medium" if guess else "high",
+                                 "author written in the title field" + ("; title taken from the title field" if guess else ""))
                         res_title = new_t
             if local:
                 author, conf, note = local
+                res_title = pick_title(res_title, None)
             elif len(q) < 3 or q.casefold() in LOOKUP_JUNK or q.isdigit() or LOOKUP_JUNK_RE.match(q):
                 author, conf, note = None, "skip", "title too short or generic"
             elif by and fix_author(by):
@@ -2425,8 +2455,9 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
                     note = f"no exact title match ({len(cache[q])} results" + (f": {seen_docs})" if seen_docs else ")")
                 else:
                     cased = next((d["title"] for d in cache[q] if norm(d["title"].replace("&", " and ")) == norm(q.replace("&", " and "))), None)
-                    if cased and (q.isupper() or q.islower() or q.casefold() == cased.casefold()):
-                        res_title = cased
+                    res_title = pick_title(q, cased)
+            if author and norm(author) == norm(res_title):
+                author, conf, note = None, "low", "the proposed author is the title"
             if author:
                 author = spelling.get(norm(author)) or spelling.get(norm(" ".join(author.split()[-1:] + author.split()[:-1]))) or author
             counts[conf] = counts.get(conf, 0) + 1
