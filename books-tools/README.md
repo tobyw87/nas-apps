@@ -183,3 +183,10 @@ folders are removed (empty only). Never deletes a book.
 from the given source formats) out of EPUB Archive/Textbooks into `Archive/Converted/` (outside 5_Books,
 so BookOrbit doesn't scan it), keeping `Author/Title/` paths. It follows earlier regroup moves. Moves
 nothing: apply the plan with `cleanup-apply.sh`. The unconverted originals stay in `_5_Books_removed`.
+
+## calibre-fix (swapped author/title in the Calibre library)
+
+`books.sh calibre-fix <library> [--apply]` finds Calibre books whose author and title are swapped (the old
+archive stored "Last, First" as the title) and sets the right ones; Calibre renames the book folders itself.
+Dry run writes `calibre-fix-<stamp>.csv`. Stop the Calibre container first (one process per library).
+Authors with 4+ books are never touched.

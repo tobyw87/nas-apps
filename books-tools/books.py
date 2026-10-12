@@ -2007,6 +2007,65 @@ def converted(formats=None):
     log(f"  sudo /volume1/docker/books-tools/cleanup-apply.sh '{plan_file}'")
 
 
+# ---------------------------------------------------------------- fix swapped metadata in a Calibre library
+
+CALIBRE_FIX_SCRIPT = r"""
+import sys, csv, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[-4])))
+import books
+from calibre.library import db
+lib, apply_, report = sys.argv[-3], sys.argv[-2] == "1", sys.argv[-1]
+d = db(lib).new_api
+ids = sorted(d.all_book_ids())
+per_author = {}
+rows = []
+for i in ids:
+    a = d.field_for("authors", i) or ()
+    per_author.setdefault(books.norm(a[0]) if a else "", []).append(i)
+for i in ids:
+    a = d.field_for("authors", i) or ()
+    t = d.field_for("title", i) or ""
+    if not a or len(per_author[books.norm(a[0])]) >= 4:      # a real author has many books
+        continue
+    fixed = books.regroup_unswap(a[0], t)
+    if fixed and fixed[0] and fixed[1]:
+        rows.append((i, t, a[0], fixed[1], fixed[0]))
+with open(report, "w", newline="", encoding="utf-8-sig") as f:
+    w = csv.writer(f)
+    w.writerow(["id", "old title", "old author", "new title", "new author"])
+    w.writerows(rows)
+print("%d of %d book(s) have author and title swapped" % (len(rows), len(ids)))
+if apply_:
+    for n, (i, t, a, nt, na) in enumerate(rows, 1):
+        d.set_field("title", {i: nt})
+        d.set_field("authors", {i: (na,)})
+        if n % 500 == 0:
+            print("Fixed %d..." % n, flush=True)
+    print("Fixed %d book(s)" % len(rows))
+d.close()
+"""
+
+
+def calibre_fix(library, apply):
+    """Fix books whose Calibre author and title are swapped (old-archive books). Calibre renames the
+    book folders itself. Run with the Calibre container stopped (one process per library)."""
+    lib = Path(library)
+    if not (lib / "metadata.db").exists():
+        sys.exit(f"STOP: {lib} is not a Calibre library (no metadata.db).")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    report = LOGS_DIR / f"calibre-fix-{stamp}.csv"
+    script = DATA_DIR / "calibre-fix.py"
+    script.write_text(CALIBRE_FIX_SCRIPT, encoding="utf-8")
+    r = subprocess.run(["calibre-debug", "-e", str(script), "--", str(Path(__file__).resolve()),
+                        str(lib), "1" if apply else "0", str(report)])
+    if r.returncode:
+        sys.exit(f"calibre-debug failed ({r.returncode})")
+    log(f"Report: {report}")
+    if not apply:
+        log("Nothing changed. To fix them: books.sh calibre-fix --apply '<library>'")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2018,6 +2077,9 @@ def main():
     sub.add_parser("status")
     sub.add_parser("cleanup")
     sub.add_parser("regroup")
+    cf = sub.add_parser("calibre-fix")
+    cf.add_argument("library")
+    cf.add_argument("--apply", action="store_true")
     cv = sub.add_parser("converted")
     cv.add_argument("--formats", help="only books converted from these formats, e.g. rtf,txt")
     sub.add_parser("migrate-db")
@@ -2057,6 +2119,8 @@ def main():
         organize(a.apply, a.retry_errors)
     elif a.cmd == "cleanup":
         cleanup()
+    elif a.cmd == "calibre-fix":
+        calibre_fix(a.library, a.apply)
     elif a.cmd == "converted":
         converted(a.formats)
     elif a.cmd == "regroup":
