@@ -2272,6 +2272,8 @@ def lookup_query(title):
     author = None
     if by:
         t, author = by.group(1).strip(), by.group(2).strip()
+    for _ in range(3):                                          # "(Star Wars - Legends)", "(Ellora's Cave)"
+        t = re.sub(r"\s*\([^()]*\)\s*$", "", t).strip()
     parts = [x.strip() for x in t.split(" - ") if x.strip()]
     if len(parts) >= 2:
         t = parts[-1]
