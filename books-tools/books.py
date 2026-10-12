@@ -2385,7 +2385,8 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
                 last, _, first = m.group(1).partition(", ")
                 if name_ish(last) and name_ish(first):
                     parts = [x.strip() for x in tt.split(" - ")]
-                    new_t = lookup_query(parts[-1])[0] if len(parts) >= 3 else lookup_query(a_title)[0]
+                    stub = a_title == a_title.lower() and len(a_title.split()) <= 2          # "verdell": a scanner's handle
+                    new_t = lookup_query(parts[-1])[0] if (len(parts) >= 3 or (stub and len(parts) >= 2)) else lookup_query(a_title)[0]
                     if new_t and len(new_t) >= 3:
                         local = (fix_author(m.group(1)), "high", "author written in the title field")
                         res_title = new_t
