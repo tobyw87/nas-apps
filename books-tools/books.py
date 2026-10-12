@@ -2226,14 +2226,25 @@ LOOKUP_JUNK = {"index", "do", "a", "x", "v1", "contents", "prologue", "chapter",
                "title", "book", "one", "the", "part one", "copyright", "version 1", "scanned by highroller"}
 
 
-def http_json(url, retries=4, pause=1.0):
-    """GET json politely: back off on 429/5xx, give up (None) on anything else."""
+RATE_LIMITED = set()      # hosts that said 429: left alone for the rest of the run
+
+
+def http_json(url, retries=3, pause=1.0, quit_on_429=False):
+    """GET json politely: back off on 5xx, give up (None) on anything else. quit_on_429: don't retry a rate limit,
+    and remember the host so it isn't asked again this run."""
+    host = urllib.parse.urlparse(url).netloc
+    if host in RATE_LIMITED:
+        return None
     for n in range(retries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": LOOKUP_UA})
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=20) as r:
                 return json.loads(r.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as e:
+            if e.code == 429 and quit_on_429:
+                RATE_LIMITED.add(host)
+                log(f"{host} is rate limiting this address: not using it for the rest of this run")
+                return None
             if e.code in (429, 500, 502, 503, 504):
                 time.sleep(pause * (3 ** n))
                 continue
@@ -2271,9 +2282,13 @@ def ol_search(q, fetch=None):
 
 
 def gb_search(q, fetch=None):
-    fetch = fetch or http_json
+    fetch = fetch or (lambda u: http_json(u, quit_on_429=True))
+    if "www.googleapis.com" in RATE_LIMITED:
+        return [], True                      # nothing to ask: not an error
     d = fetch("https://www.googleapis.com/books/v1/volumes?" + urllib.parse.urlencode(
         {"q": f'intitle:"{q}"', "maxResults": 8, "printType": "books"}))
+    if d is None and "www.googleapis.com" in RATE_LIMITED:
+        return [], True
     out = []
     for x in (d or {}).get("items", []):
         v = x.get("volumeInfo", {})
