@@ -2075,7 +2075,7 @@ def fix_one(a0, t, n_books, canon_names):
             parts = [x.strip() for x in m.group(2).split(" - ")]
             if len(parts) >= 2:
                 nt = books.fix_title(parts[-1])
-            elif books.norm(a0) in books.norm(parts[0]):     # the author field is (part of) the title
+            elif books.norm(a0) in books.norm(parts[0]) or re.search(r"\d$", parts[0]):   # the author field is the title
                 nt = books.fix_title(a0)
             else:                                            # "Frederik Pohl - Title" with a junk author field
                 nt = books.fix_title(parts[0])
