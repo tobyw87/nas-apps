@@ -1825,8 +1825,12 @@ NAME_PARTICLES = {"de", "van", "von", "der", "den", "la", "le", "di", "da", "du"
 
 
 def name_ish(s):
-    """Looks like (part of) a person's name: 1-4 capitalized words/initials, no digits or punctuation."""
-    words = s.split()
+    """Looks like (part of) a person's name: 1-4 capitalized words/initials, no digits or punctuation.
+    A list of such names ("Marie Osmond; Marcia Wilkie", "Weis & Hickman") counts too."""
+    parts = [x.strip() for x in re.split(r"\s*(?:;|&|\band\b|\|)\s*", s) if x.strip()]
+    if len(parts) > 1:
+        return all(name_ish(x) for x in parts)
+    words = re.sub(r",?\s*(?:jr|sr|ii|iii|iv|phd|md)\.?$", "", s.strip(), flags=re.I).split()
     return (1 <= len(words) <= 4 and not re.search(r"[\d:;()\[\]]", s)
             and all(w[:1].isupper() or w in NAME_PARTICLES for w in words))
 
@@ -2167,7 +2171,7 @@ def no_real_author(a, t, per):
 
 def title_is_junk(t):
     q, _ = lookup_query(t)
-    return len(q) < 4 or q.casefold() in LOOKUP_JUNK or q.isdigit()
+    return len(q) < 3 or q.casefold() in LOOKUP_JUNK or q.isdigit() or bool(LOOKUP_JUNK_RE.match(clean_text(t or "")))
 
 
 # ---------------------------------------------------------------- authors missing from the metadata
@@ -2222,6 +2226,9 @@ def calibre_authors(library):
 # ---------------------------------------------------------------- look up missing authors online
 
 LOOKUP_UA = "books-tools/1.0 (personal ebook library)"
+LOOKUP_JUNK_RE = re.compile(
+    r"^(?:(?:v(?:ersion)?\s*\d[\d.]*\s*)?(?:scanned|proofed|proofread|converted|ripped|edited|formatted|typed|spell\s?checked|ocr)\b"
+    r"|copyright\b|\(c\)|version\s*\d|e-?version|html\b|<|=+$|\\v$|table of contents|contents$|chapter\s*(?:\d+|one)$|prologue$)", re.I)
 LOOKUP_JUNK = {"index", "do", "a", "x", "v1", "contents", "prologue", "chapter", "default", "unknown", "untitled",
                "title", "book", "one", "the", "part one", "copyright", "version 1", "scanned by highroller"}
 
@@ -2258,7 +2265,10 @@ def lookup_query(title):
     """The part of a messy title worth searching for, plus an author if the title names one."""
     t = clean_text(re.sub(r"\.(txt|doc|rtf|lit|epub|html?)$", "", title or "", flags=re.I))
     t = re.sub(r"\s*[\[(](?:v?\d[\d.]*|uc|ocr|html|txt|lit|ebook|b|rtf)[\])]", "", t, flags=re.I).strip()
+    t = re.sub(r"^microsoft word\s*-\s*", "", t, flags=re.I)
     by = re.match(r"^(.*?)\s+by\s+([A-Z][\w.' -]{3,40})$", t)
+    if by and re.search(r"\b(?:scanned|proofed|proofread|converted|ripped|edited|formatted|typed|ocr'?d?|spell\s?checked)\s*(?:&\s*\w+\s*)?$", by.group(1), re.I):
+        by = None
     author = None
     if by:
         t, author = by.group(1).strip(), by.group(2).strip()
@@ -2273,7 +2283,7 @@ def lookup_query(title):
 def ol_search(q, fetch=None):
     fetch = fetch or http_json
     d = fetch("https://openlibrary.org/search.json?" + urllib.parse.urlencode(
-        {"title": q, "limit": 10, "fields": "title,author_name,edition_count"}))
+        {"title": q, "limit": 40, "fields": "title,author_name,edition_count"}))
     out = []
     for x in (d or {}).get("docs", []):
         if x.get("author_name"):
@@ -2362,16 +2372,35 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
         w = csv.writer(f)
         w.writerow(["id", "current title", "current author", "proposed author", "proposed title", "confidence", "alternatives"])
         for n, (i, t, a) in enumerate(todo, 1):
-            q, by = lookup_query(t)
-            if title_is_junk(t):                       # the real title is probably what Calibre filed as the author
-                q, by = lookup_query(a)
-            if len(q) < 4 or q.casefold() in LOOKUP_JUNK or q.isdigit():
-                res = (None, "skip", "title too short or generic")
+            a_title = clean_text(a.replace("|", ",")) if a else a       # Calibre shows a comma as "|"
+            title_junk = title_is_junk(t)
+            q, by = lookup_query(a_title if title_junk else t)
+            res_title = q
+            # 1. an author written in the title field itself: "Haydon, Elizabeth - Rhapsody 1", "Tepper, Sheri S"
+            local = None
+            tt = re.sub(r"^microsoft word\s*-\s*", "", clean_text(t or ""), flags=re.I)
+            tt = re.sub(r"\.(txt|doc|rtf|lit|epub|html?)$", "", re.sub(r",(?=\S)", ", ", tt), flags=re.I)
+            m = NAME_FORM.match(tt)
+            if m and not title_junk:
+                last, _, first = m.group(1).partition(", ")
+                if name_ish(last) and name_ish(first):
+                    parts = [x.strip() for x in tt.split(" - ")]
+                    new_t = lookup_query(parts[-1])[0] if len(parts) >= 3 else lookup_query(a_title)[0]
+                    if new_t and len(new_t) >= 3:
+                        local = (fix_author(m.group(1)), "high", "author written in the title field")
+                        res_title = new_t
+            if local:
+                author, conf, note = local
+            elif len(q) < 3 or q.casefold() in LOOKUP_JUNK or q.isdigit() or LOOKUP_JUNK_RE.match(q):
+                author, conf, note = None, "skip", "title too short or generic"
             elif by and fix_author(by):
-                res = (fix_author(by), "high", "author named in the title")
+                author, conf, note = fix_author(by), "high", "author named in the title"
             else:
                 if q not in cache:
                     docs, ok = ol_search(q)
+                    if ":" in q and not any(norm(d["title"]) == norm(q) for d in docs):
+                        d2, ok2 = ol_search(q.split(":")[0].strip())
+                        docs, ok = docs + d2, ok or ok2
                     if not ok or not any(norm(d["title"].replace("&", " and ")) == norm(q.replace("&", " and ")) for d in docs):
                         docs2, ok2 = gb_search(q)
                         docs = docs + docs2
@@ -2379,6 +2408,7 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
                     if not ok:
                         fails += 1
                         if fails >= 15:
+                            cache_file.write_text(json.dumps(cache), "utf-8")
                             sys.exit("STOP: the lookup services keep failing (rate limit or no internet). Run again later; "
                                      "answers so far are cached.")
                         continue
@@ -2386,12 +2416,18 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
                     if len(cache) % 25 == 0:
                         cache_file.write_text(json.dumps(cache), "utf-8")
                     time.sleep(0.7)
-                res = lookup_choose(q, cache[q], known)
-            author, conf, note = res
+                author, conf, note = lookup_choose(q, cache[q], known)
+                if conf == "low" and note == "no exact title match":
+                    seen_docs = "; ".join(f"{d['title'][:30]} / {d['author'][:20]}" for d in cache[q][:3])
+                    note = f"no exact title match ({len(cache[q])} results" + (f": {seen_docs})" if seen_docs else ")")
+                else:
+                    cased = next((d["title"] for d in cache[q] if norm(d["title"].replace("&", " and ")) == norm(q.replace("&", " and "))), None)
+                    if cased and (q.isupper() or q.islower() or q.casefold() == cased.casefold()):
+                        res_title = cased
             if author:
                 author = spelling.get(norm(author)) or spelling.get(norm(" ".join(author.split()[-1:] + author.split()[:-1]))) or author
             counts[conf] = counts.get(conf, 0) + 1
-            w.writerow([i, t, a, author or "", q, conf, note])
+            w.writerow([i, t, a, author or "", res_title, conf, note])
             if n % 100 == 0:
                 log(f"Looked up {n} of {len(todo)}...")
     cache_file.write_text(json.dumps(cache), "utf-8")
