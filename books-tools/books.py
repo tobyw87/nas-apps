@@ -2615,6 +2615,88 @@ def calibre_review(library, apply):
     log("Done. Now run: calibredb backup_metadata --all, then rescan the library in BookOrbit.")
 
 
+CALIBRE_SINGLE_APPLY = r"""
+import sys, csv
+from calibre.library import db
+lib, rows = sys.argv[-2], sys.argv[-1]
+d = db(lib).new_api
+n = 0
+for line in csv.DictReader(open(rows, encoding="utf-8-sig")):
+    d.set_field("authors", {int(line["id"]): (line["proposed author"],)})
+    n += 1
+    if n % 500 == 0:
+        print("Fixed %d..." % n, flush=True)
+print("Fixed %d book(s)" % n)
+d.close()
+"""
+
+
+def first_author(name):
+    """'Ayn Rand; Leonard Peikoff', 'Weis| Margaret; Hickman| Tracy', 'Weis and Hickman' -> the first person, 'First Last'."""
+    a = clean_text(name.replace("|", ","))
+    parts = [x.strip() for x in re.split(r"\s*;\s*|\s+&\s+", a) if x.strip()]
+    if len(parts) == 1:
+        m = re.match(r"^(.+?)\s+and\s+(.+)$", parts[0])
+        if m and name_ish(m.group(1)) and name_ish(m.group(2)):
+            parts = [m.group(1)]
+    return fix_author(parts[0]) if parts else None
+
+
+def calibre_single_author(library, apply):
+    """Every book gets ONE author (the first), so 'Ayn Rand; Leonard Peikoff; ...' folders all become 'Ayn Rand'."""
+    lib = Path(library)
+    mdb = lib / "metadata.db"
+    if not mdb.exists():
+        sys.exit(f"STOP: {lib} is not a Calibre library (no metadata.db).")
+    cal = sqlite3.connect(f"file:{mdb}?immutable=1", uri=True)
+    names = {}
+    for i, a in cal.execute("""SELECT l.book, a.name FROM books_authors_link l JOIN authors a ON a.id=l.author
+                               ORDER BY l.book, l.id"""):
+        names.setdefault(i, []).append(a)
+    titles = dict(cal.execute("SELECT id, title FROM books"))
+    count = {}
+    for al in names.values():
+        count[al[0]] = count.get(al[0], 0) + 1
+    changes = []
+    for i, al in sorted(names.items()):
+        cur = al[0]
+        if len(al) == 1 and not re.search(r"[;&|,]|\sand\s", cur):
+            continue
+        new = first_author(cur)
+        if not new or new.casefold() in (JUNK_AUTHORS | EXTRA_JUNK_AUTHORS) or (len(al) == 1 and new == cur):
+            continue
+        changes.append((i, titles.get(i, ""), " ; ".join(al), new))
+    # one spelling per person: the one most books already use
+    spell = {}
+    for al in names.values():
+        spell.setdefault(norm(al[0]), {}).setdefault(al[0], 0)
+        spell[norm(al[0])][al[0]] += 1
+    final = []
+    for i, t, cur, new in changes:
+        opts = spell.get(norm(new))
+        new = max(opts, key=opts.get) if opts else new
+        if new != cur:
+            final.append((i, t, cur, new))
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    out = LOGS_DIR / f"calibre-single-author-{stamp}.csv"
+    with open(out, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "title", "current author", "proposed author"])
+        w.writerows(final)
+    log(f"{len(names)} books; {len(final)} get a single first author ({len({c for _, _, c, _ in final})} author names collapse)")
+    log(f"List: {out}")
+    if not apply:
+        log("Nothing changed. Check it, back up metadata.db, stop the Calibre container, then add --apply.")
+        return
+    script = DATA_DIR / "calibre-single-apply.py"
+    script.write_text(CALIBRE_SINGLE_APPLY, encoding="utf-8")
+    r = subprocess.run(["calibre-debug", "-e", str(script), "--", str(lib), str(out)])
+    if r.returncode:
+        sys.exit(f"calibre-debug failed ({r.returncode})")
+    log("Done. Now refresh the metadata files (calibredb backup_metadata --all) and rescan in BookOrbit.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2631,6 +2713,9 @@ def main():
     cl.add_argument("--apply", metavar="REPORT_CSV")
     cl.add_argument("--level", choices=["high", "medium"], default="high")
     cl.add_argument("--limit", type=int)
+    cs = sub.add_parser("calibre-single-author")
+    cs.add_argument("library")
+    cs.add_argument("--apply", action="store_true")
     cr = sub.add_parser("calibre-review")
     cr.add_argument("library")
     cr.add_argument("--apply", action="store_true")
@@ -2680,6 +2765,8 @@ def main():
         cleanup()
     elif a.cmd == "calibre-lookup":
         calibre_lookup(a.library, a.apply, a.level, a.limit)
+    elif a.cmd == "calibre-single-author":
+        calibre_single_author(a.library, a.apply)
     elif a.cmd == "calibre-review":
         calibre_review(a.library, a.apply)
     elif a.cmd == "calibre-authors":
