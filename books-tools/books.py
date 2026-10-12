@@ -2051,12 +2051,20 @@ rows = []
 for i in ids:
     a = d.field_for("authors", i) or ()
     per_author.setdefault(books.norm(a[0]) if a else "", []).append(i)
+JUNK_TITLE = [re.compile(x, re.I) for x in (r"\.(txt|doc|docx|rtf|epub|lit|pdf|mobi|html?)$", r"\s*\[(?:v?[\d.]+|uc|ocr|html|txt|lit)\]",
+              r"\s*\(v\d[\d.]*\)", r"\s+e-?txt$", r"\s+v\d+(\.\d+)?$")]
+def clean_title(t):
+    for _ in range(2):
+        for rx in JUNK_TITLE:
+            t = rx.sub("", t).strip()
+    return t
 def fix_one(a0, t, n_books, canon_names):
     t = re.sub(r",(?=\S)", ", ", t)                         # "Williams,Tad - X" -> "Williams, Tad - X"
-    if len(per_author[books.norm(a0)]) < 4 or " - " in t:    # a real author has many books
+    many = len(per_author[books.norm(a0)]) >= 4              # a real author, or a junk name shared by many books
+    if not many or len(t.split(" - ")) >= 3:                 # then only trust a title carried in the title field
         fixed = books.regroup_unswap(a0, t)
         if fixed and fixed[0] and fixed[1]:
-            return fixed
+            return fixed[0], clean_title(fixed[1])
     m = books.AUTHOR_FIRST.match(t)                          # "Anne McCaffrey - Pern07 Smallest Dragonboy"
     if m and n_books <= 3 and books.name_ish(m.group(1)):
         name = canon_names.get(books.norm(m.group(1)))
@@ -2065,7 +2073,13 @@ def fix_one(a0, t, n_books, canon_names):
             name = canon_names.get(books.norm(" ".join(w[1:] + w[:1])))
         if name:
             parts = [x.strip() for x in m.group(2).split(" - ")]
-            nt = books.fix_title(parts[-1]) if len(parts) >= 2 else books.fix_title(a0)
+            if len(parts) >= 2:
+                nt = books.fix_title(parts[-1])
+            elif books.norm(a0) in books.norm(parts[0]):     # the author field is (part of) the title
+                nt = books.fix_title(a0)
+            else:                                            # "Frederik Pohl - Title" with a junk author field
+                nt = books.fix_title(parts[0])
+            nt = clean_title(nt or "")
             if nt and books.norm(nt) != books.norm(name):
                 return name, nt
     return None
