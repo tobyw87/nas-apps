@@ -202,3 +202,5 @@ the title names its author; "medium" = clear winner but not already in the libra
 
 - `calibre-review <library> [--apply]`: books without a proper author/title are copied (size-checked) to a plain folder, `REVIEW_DIR` (default `/volume1/NAS/Archive/EPUB To Fix`, outside 5_Books), then removed from the Calibre library. Dry run lists them; `metadata.db` is backed up first.
 - `calibre-single-author <library> [--apply]`: gives every book one author, the first (`Ayn Rand; Leonard Peikoff` -> `Ayn Rand`, `Weis| Margaret` -> `Margaret Weis`), so each author has exactly one folder. Dry run lists the changes.
+- `calibre-review --strict`: also moves books whose author is not a person's name (lists the odd names first).
+- `calibre-export <library>`: writes the library out as plain `Author/Title/Title.epub` (first author only, no ids, correct metadata embedded in each file; a same-title duplicate becomes `Title (2)`) to `EXPORT_DIR` (default `/volume1/NAS/Archive/EPUB Clean`). Resumable via `_exported.csv`. Calibre itself can't drop the `(id)` or author from its folders, so BookOrbit gets this tree instead.

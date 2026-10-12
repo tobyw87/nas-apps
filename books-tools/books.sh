@@ -26,4 +26,10 @@ if [ "$1" = calibre-review ]; then
   mkdir -p "$REVIEW_DIR"
   exec docker compose run --rm -T -v "$REVIEW_DIR:$REVIEW_DIR" -e REVIEW_DIR="$REVIEW_DIR" books "$@"
 fi
+if [ "$1" = calibre-export ]; then
+  # the clean Author/Title/Title.epub tree for BookOrbit (outside 5_Books until I swap it in)
+  EXPORT_DIR="${EXPORT_DIR:-/volume1/NAS/Archive/EPUB Clean}"
+  mkdir -p "$EXPORT_DIR"
+  exec docker compose run --rm -T -v "$EXPORT_DIR:$EXPORT_DIR" -e EXPORT_DIR="$EXPORT_DIR" books "$@"
+fi
 exec docker compose run --rm -T books "$@"

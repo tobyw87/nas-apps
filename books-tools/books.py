@@ -2570,7 +2570,7 @@ src.close()
 """
 
 
-def calibre_review(library, apply):
+def calibre_review(library, apply, strict=False):
     """Take every book without a proper author/title out of the Calibre library into a plain folder
     (copied and size-checked first; removed from Calibre only after that)."""
     lib = Path(library)
@@ -2590,7 +2590,18 @@ def calibre_review(library, apply):
     per = {}
     for _, _, a in books:
         per[norm(a)] = per.get(norm(a), 0) + 1
-    bad = [(i, t, a) for i, t, a in books if no_real_author(a, t, per) or title_is_junk(t)]
+    def not_a_person(a):
+        a = clean_text((a or "").replace("|", ","))
+        return not name_ish(a) or bool(re.search(r"\d", a))
+    bad = [(i, t, a) for i, t, a in books
+           if no_real_author(a, t, per) or title_is_junk(t) or (strict and not_a_person(a))]
+    if strict:
+        odd = {}
+        for _, _, a in bad:
+            if not_a_person(a):
+                odd[a] = odd.get(a, 0) + 1
+        log("Author names that are not a person's name (most books first): " +
+            "; ".join(f"{a} ({n})" for a, n in sorted(odd.items(), key=lambda x: -x[1])[:60]))
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     out = LOGS_DIR / f"calibre-review-{stamp}.csv"
@@ -2697,6 +2708,83 @@ def calibre_single_author(library, apply):
     log("Done. Now refresh the metadata files (calibredb backup_metadata --all) and rescan in BookOrbit.")
 
 
+CALIBRE_EXPORT = r"""
+import sys, os, re, csv
+from calibre.library import db
+from calibre.ebooks.metadata.meta import set_metadata
+lib, dest = sys.argv[-2], sys.argv[-1]
+d = db(lib).new_api
+def safe(x, n=100):
+    x = re.sub(r'[\\/:*?"<>|]+', " ", x or "")
+    x = re.sub(r"\s+", " ", x).strip(" .")
+    return x[:n].strip(" .") or "untitled"
+done_file = os.path.join(dest, "_exported.csv")
+done = set()
+if os.path.exists(done_file):
+    done = {int(r[0]) for r in csv.reader(open(done_file, encoding="utf-8-sig")) if r}
+log = open(done_file, "a", newline="", encoding="utf-8-sig")
+w = csv.writer(log)
+ids = sorted(d.all_book_ids())
+ok = skipped = bad_meta = failed = 0
+for n, i in enumerate(ids, 1):
+    if i in done:
+        skipped += 1
+        continue
+    try:
+        mi = d.get_metadata(i)
+        author = safe(mi.authors[0] if mi.authors else "Unknown")
+        title = safe(mi.title)
+        for fmt in d.formats(i):
+            k, name = 1, title
+            while True:
+                folder = os.path.join(dest, author, name)
+                path = os.path.join(folder, "%s.%s" % (name, fmt.lower()))
+                if not os.path.exists(path):
+                    break
+                k += 1
+                name = "%s (%d)" % (title, k)
+            os.makedirs(folder, exist_ok=True)
+            with open(path, "wb") as f:
+                d.copy_format_to(i, fmt, f)
+            if os.path.getsize(path) != d.format_metadata(i, fmt)["size"]:
+                raise RuntimeError("copy is the wrong size")
+            try:
+                with open(path, "r+b") as f:
+                    set_metadata(f, mi, fmt.lower())
+            except Exception as e:
+                bad_meta += 1
+                print("metadata not written for id %d: %s" % (i, e), flush=True)
+            w.writerow([i, author, name, fmt])
+        log.flush()
+        ok += 1
+    except Exception as e:
+        failed += 1
+        print("FAILED id %s: %s" % (i, e), flush=True)
+    if n % 250 == 0:
+        print("Exported %d of %d..." % (n, len(ids)), flush=True)
+print("Exported %d, already done %d, metadata not written %d, failed %d" % (ok, skipped, bad_meta, failed))
+log.close()
+d.close()
+"""
+
+
+def calibre_export(library):
+    """Write the library out as a plain Author/Title/Title.epub tree (correct metadata embedded), leaving Calibre untouched."""
+    lib = Path(library)
+    dest = Path(os.environ.get("EXPORT_DIR") or "/volume1/NAS/Archive/EPUB Clean")
+    if not (lib / "metadata.db").exists():
+        sys.exit(f"STOP: {lib} is not a Calibre library (no metadata.db).")
+    if dest.resolve() == lib.resolve() or lib.resolve() in dest.resolve().parents:
+        sys.exit("STOP: the export folder must be outside the Calibre library.")
+    dest.mkdir(parents=True, exist_ok=True)
+    script = DATA_DIR / "calibre-export.py"
+    script.write_text(CALIBRE_EXPORT, encoding="utf-8")
+    log(f"Exporting {lib} to {dest} (safe to stop and run again; it carries on where it left off)")
+    r = subprocess.run(["calibre-debug", "-e", str(script), "--", str(lib), str(dest)])
+    if r.returncode:
+        sys.exit(f"calibre-debug failed ({r.returncode})")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2713,12 +2801,15 @@ def main():
     cl.add_argument("--apply", metavar="REPORT_CSV")
     cl.add_argument("--level", choices=["high", "medium"], default="high")
     cl.add_argument("--limit", type=int)
+    ce = sub.add_parser("calibre-export")
+    ce.add_argument("library")
     cs = sub.add_parser("calibre-single-author")
     cs.add_argument("library")
     cs.add_argument("--apply", action="store_true")
     cr = sub.add_parser("calibre-review")
     cr.add_argument("library")
     cr.add_argument("--apply", action="store_true")
+    cr.add_argument("--strict", action="store_true", help="also move books whose author is not a person's name")
     ca = sub.add_parser("calibre-authors")
     ca.add_argument("library")
     cf = sub.add_parser("calibre-fix")
@@ -2765,10 +2856,12 @@ def main():
         cleanup()
     elif a.cmd == "calibre-lookup":
         calibre_lookup(a.library, a.apply, a.level, a.limit)
+    elif a.cmd == "calibre-export":
+        calibre_export(a.library)
     elif a.cmd == "calibre-single-author":
         calibre_single_author(a.library, a.apply)
     elif a.cmd == "calibre-review":
-        calibre_review(a.library, a.apply)
+        calibre_review(a.library, a.apply, a.strict)
     elif a.cmd == "calibre-authors":
         calibre_authors(a.library)
     elif a.cmd == "calibre-fix":
