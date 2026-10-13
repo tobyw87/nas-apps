@@ -36,6 +36,12 @@ if [ "$1" = calibre-tidy ]; then
   mkdir -p "$DUPES_DIR"
   exec docker compose run --rm -T $MASTER_VOL -v "$DUPES_DIR:$DUPES_DIR" -e DUPES_DIR="$DUPES_DIR" books "$@"
 fi
+if [ "$1" = covers ]; then
+  # books removed by cover are moved here (outside 5_Books); I delete it myself
+  COVERS_HOLD_DIR="${COVERS_HOLD_DIR:-/volume1/NAS/Archive/EPUB Cover Removed}"
+  mkdir -p "$COVERS_HOLD_DIR"
+  exec docker compose run --rm -T -v "$COVERS_HOLD_DIR:$COVERS_HOLD_DIR" -e COVERS_HOLD_DIR="$COVERS_HOLD_DIR" books "$@"
+fi
 if [ "$1" = calibre-export ]; then
   # the clean Author/Title/Title.epub tree for BookOrbit (outside 5_Books until I swap it in)
   EXPORT_DIR="${EXPORT_DIR:-/volume1/NAS/Archive/EPUB Clean}"

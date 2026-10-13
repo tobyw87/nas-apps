@@ -2971,6 +2971,117 @@ def calibre_tidy(library, apply):
     log("Done. Now run calibre-export again (new folder) to build the clean tree.")
 
 
+# ---------------------------------------------------------------- covers
+
+def epub_cover(path):
+    """-> (bytes, extension) of the cover image inside an epub, or None."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            root = ET.fromstring(z.read("META-INF/container.xml"))
+            rf = root.find(".//{*}rootfile")
+            opf_path = rf.get("full-path")
+            opf = ET.fromstring(z.read(opf_path))
+            base = posixpath.dirname(opf_path)
+            items = {}
+            for it in opf.findall(".//{*}manifest/{*}item"):
+                items[it.get("id")] = (it.get("href"), it.get("media-type") or "", it.get("properties") or "")
+            href = None
+            for m in opf.findall(".//{*}metadata/{*}meta"):
+                if m.get("name") == "cover" and m.get("content") in items:
+                    href = items[m.get("content")][0]
+            if not href:
+                for h, mt, pr in items.values():
+                    if "cover-image" in pr:
+                        href = h
+            if not href:
+                return None
+            name = posixpath.normpath(posixpath.join(base, urllib.parse.unquote(href)))
+            data = z.read(name)
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else "img"
+            if not (data[:3] == b"\xff\xd8\xff" or data[:4] == b"\x89PNG" or data[:3] == b"GIF" or data[:2] == b"BM" or data[:4] == b"RIFF"):
+                return None                                  # a page, not a picture
+            return data, ext
+    except Exception:
+        return None
+
+
+def covers(library, remove=None, apply=False):
+    """Group the library's books by cover image: a contact sheet to look at, then remove the groups you pick."""
+    lib = Path(library)
+    out_dir = LOGS_DIR / "covers"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = DATA_DIR / "covers-cache.json"
+    try:
+        cache = json.loads(cache_file.read_text("utf-8"))
+    except Exception:
+        cache = {}
+    books = []
+    for dp, dn, fn in os.walk(lib):
+        dn[:] = [d for d in dn if d not in SKIP_DIRS and not d.startswith(".")]
+        for f in fn:
+            if f.lower().endswith(".epub"):
+                books.append(Path(dp) / f)
+    log(f"{len(books)} epub files; reading their covers" + (f" ({len(cache)} cached)" if cache else ""))
+    groups = {}
+    for n, b in enumerate(books, 1):
+        st = b.stat()
+        key = f"{b}|{st.st_size}|{int(st.st_mtime)}"
+        ent = cache.get(key)
+        if ent is None:
+            c = epub_cover(b)
+            ent = [hashlib.sha1(c[0]).hexdigest()[:10], c[1], len(c[0])] if c else ["", "", 0]
+            cache[key] = ent
+        if ent[0]:
+            groups.setdefault(ent[0], []).append((b, ent))
+        if n % 1000 == 0:
+            log(f"  {n} of {len(books)}")
+            cache_file.write_text(json.dumps(cache), "utf-8")
+    cache_file.write_text(json.dumps(cache), "utf-8")
+    if remove is not None:
+        ids = [x.strip() for x in remove.split(",") if x.strip()]
+        hold = Path(os.environ.get("COVERS_HOLD_DIR") or "/volume1/NAS/Archive/EPUB Cover Removed")
+        picked = [b for g in ids for b, _ in groups.get(g, [])]
+        log(f"{len(picked)} books have the cover(s) {', '.join(ids)}" + (f"; moving them to {hold}" if apply else " (dry run)"))
+        for b in picked[:15]:
+            log(f"   {b.relative_to(lib)}")
+        if not apply:
+            log("Nothing changed. Add --apply to move them.")
+            return
+        moved = 0
+        for b in picked:
+            rel = b.parent.relative_to(lib)
+            dest = hold / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                dest = dest.with_name(dest.name + f" ({b.stat().st_size})")
+            shutil.move(str(b.parent), str(dest))
+            moved += 1
+        log(f"Moved {moved} book folder(s) to {hold}. Rescan the library in BookOrbit, then Missing books -> Clean.")
+        return
+    top = sorted(groups.items(), key=lambda kv: -len(kv[1]))
+    rows = [(k, v) for k, v in top if len(v) >= 3][:80]
+    with open(out_dir / "clusters.csv", "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["cover id", "books", "sample 1", "sample 2", "sample 3"])
+        for k, v in top:
+            if len(v) >= 2:
+                w.writerow([k, len(v)] + [str(b.relative_to(lib)) for b, _ in v[:3]])
+    html = ["<!doctype html><meta charset=utf-8><title>Cover groups</title>",
+            "<style>body{font:14px sans-serif;margin:20px;background:#222;color:#eee}"
+            ".g{display:inline-block;width:230px;vertical-align:top;margin:8px;padding:8px;background:#333;border-radius:6px}"
+            "img{max-width:214px;max-height:300px;display:block;margin-bottom:6px}small{color:#aaa}</style>",
+            f"<h2>Cover groups in {lib.name}: biggest first (a group = the same picture on N books)</h2>"]
+    for k, v in rows:
+        ext = v[0][1][1]
+        (out_dir / f"{k}.{ext}").write_bytes(epub_cover(v[0][0])[0])
+        samples = "<br>".join(str(b.relative_to(lib).parts[0]) + " / " + b.parent.name for b, _ in v[:3])
+        html.append(f"<div class=g><img src='{k}.{ext}'><b>{k}</b> &middot; {len(v)} books<br><small>{samples}</small></div>")
+    (out_dir / "index.html").write_text("\n".join(html), "utf-8")
+    log(f"{len(groups)} different covers; the {len(rows)} most-shared are on the sheet")
+    log(f"Open: {out_dir / 'index.html'}  (Windows: Z:\\Logs\\books\\covers\\index.html)")
+    log("Then: books.sh covers <library> --remove <id,id> [--apply]")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2992,6 +3103,10 @@ def main():
     ct.add_argument("--apply", action="store_true")
     ce = sub.add_parser("calibre-export")
     ce.add_argument("library")
+    cv2 = sub.add_parser("covers")
+    cv2.add_argument("library")
+    cv2.add_argument("--remove", metavar="ID,ID")
+    cv2.add_argument("--apply", action="store_true")
     cs = sub.add_parser("calibre-single-author")
     cs.add_argument("library")
     cs.add_argument("--apply", action="store_true")
@@ -3049,6 +3164,8 @@ def main():
         calibre_tidy(a.library, a.apply)
     elif a.cmd == "calibre-export":
         calibre_export(a.library)
+    elif a.cmd == "covers":
+        covers(a.library, a.remove, a.apply)
     elif a.cmd == "calibre-single-author":
         calibre_single_author(a.library, a.apply)
     elif a.cmd == "calibre-review":
