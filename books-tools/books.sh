@@ -26,6 +26,12 @@ if [ "$1" = calibre-review ]; then
   mkdir -p "$REVIEW_DIR"
   exec docker compose run --rm -T -v "$REVIEW_DIR:$REVIEW_DIR" -e REVIEW_DIR="$REVIEW_DIR" books "$@"
 fi
+if [ "$1" = calibre-tidy ]; then
+  # duplicates (the smaller file of each pair) are moved here, outside 5_Books; I delete it myself
+  DUPES_DIR="${DUPES_DIR:-/volume1/NAS/Archive/EPUB Duplicates}"
+  mkdir -p "$DUPES_DIR"
+  exec docker compose run --rm -T -v "$DUPES_DIR:$DUPES_DIR" -e DUPES_DIR="$DUPES_DIR" books "$@"
+fi
 if [ "$1" = calibre-export ]; then
   # the clean Author/Title/Title.epub tree for BookOrbit (outside 5_Books until I swap it in)
   EXPORT_DIR="${EXPORT_DIR:-/volume1/NAS/Archive/EPUB Clean}"

@@ -2828,6 +2828,139 @@ def calibre_export(library):
         sys.exit(f"calibre-debug failed ({r.returncode})")
 
 
+CALIBRE_TITLES_APPLY = r"""
+import sys, csv
+from calibre.library import db
+lib, rows = sys.argv[-2], sys.argv[-1]
+d = db(lib).new_api
+n = 0
+for line in csv.DictReader(open(rows, encoding="utf-8-sig")):
+    d.set_field("title", {int(line["id"]): line["new title"]})
+    n += 1
+    if n % 250 == 0:
+        print("Renamed %d..." % n, flush=True)
+print("Renamed %d book(s)" % n)
+d.close()
+"""
+
+TITLE_NOISE = re.compile(r"\s*[\[(](?:v?\d[\d.]*|uc|ocr|html|txt|lit|ebook|b|rtf|ssc|rsv|retail|scan|scanned|epub)[\])]", re.I)
+
+
+def same_person(text, author):
+    """Is `text` ('Dick, Philip K', 'Philip K. Dick', 'Weis & Hickman', 'Dick') the book's author?"""
+    a = clean_text(author or "").split()
+    if len(a) < 1:
+        return False
+    a_last = norm(a[-1])
+    a_first = norm(a[0])[:1]
+    for part in re.split(r"\s*(?:&|;|\band\b)\s*", clean_text(text)):
+        part = part.strip()
+        if not part:
+            continue
+        if "," in part:
+            last, _, first = part.partition(",")
+            who = f"{first.strip()} {last.strip()}".split()
+        else:
+            who = part.split()
+        if not who or len(who) > 5:
+            continue
+        if norm(who[-1]) == a_last and (len(who) == 1 or norm(who[0])[:1] == a_first):
+            return True
+    return False
+
+
+def tidy_title(title, author):
+    """Drop the author's name from a title ('Dick, Philip K - Ubik' -> 'Ubik'), plus version/format tags."""
+    t = clean_text(title or "")
+    t = re.sub(r"\.(txt|doc|rtf|lit|epub|html?)$", "", t, flags=re.I)
+    t = TITLE_NOISE.sub("", t)
+    t = re.sub(r"\s+v\d+(\.\d+)?$", "", t).strip(" -")
+    parts = [x.strip() for x in t.split(" - ") if x.strip()]
+    if len(parts) >= 2 and same_person(parts[0], author):
+        parts = parts[1:]
+    if len(parts) >= 2 and same_person(parts[-1], author):
+        parts = parts[:-1]
+    t = " - ".join(parts)
+    m = re.match(r"^(.*\S)\s+by\s+(.+)$", t)
+    if m and len(m.group(1)) >= 3 and same_person(m.group(2), author) and not re.search(r"\b(?:scanned|proofed)$", m.group(1), re.I):
+        t = m.group(1)
+    t = TITLE_NOISE.sub("", t).strip(" -")
+    return t if len(t) >= 2 else clean_text(title or "")
+
+
+def calibre_tidy(library, apply):
+    """Strip authors out of titles, then find duplicates (same author + title): keep the larger file, move the
+    others to a plain folder (copied and size-checked first)."""
+    lib = Path(library)
+    folder = Path(os.environ.get("DUPES_DIR") or "/volume1/NAS/Archive/EPUB Duplicates")
+    mdb = lib / "metadata.db"
+    if not mdb.exists():
+        sys.exit(f"STOP: {lib} is not a Calibre library (no metadata.db).")
+    if folder.resolve() == lib.resolve() or lib.resolve() in folder.resolve().parents:
+        sys.exit("STOP: the duplicates folder must be outside the Calibre library.")
+    cal = sqlite3.connect(f"file:{mdb}?immutable=1", uri=True)
+    rows, seen = [], set()
+    for i, t, a in cal.execute("""SELECT b.id, b.title, a.name FROM books b JOIN books_authors_link l ON l.book=b.id
+                                  JOIN authors a ON a.id=l.author ORDER BY b.id, l.id"""):
+        if i not in seen:
+            seen.add(i)
+            rows.append((i, t, a))
+    size = {}
+    for b, n in cal.execute("SELECT book, SUM(uncompressed_size) FROM data GROUP BY book"):
+        size[b] = n or 0
+    plan = []
+    for i, t, a in rows:
+        plan.append([i, a, t, tidy_title(t, a), "", size.get(i, 0)])
+    groups = {}
+    for r in plan:
+        groups.setdefault((norm(r[1]), norm(r[3])), []).append(r)
+    for g in groups.values():
+        g.sort(key=lambda r: (-r[5], r[0]))
+        for r in g[1:]:
+            r[4] = "duplicate"
+    for r in plan:
+        if not r[4]:
+            r[4] = "rename" if r[3] != r[2] else "keep"
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    out = LOGS_DIR / f"calibre-tidy-{stamp}.csv"
+    with open(out, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "author", "title", "new title", "action", "size"])
+        w.writerows([r for r in plan if r[4] != "keep"])
+    n_ren = sum(1 for r in plan if r[4] == "rename")
+    n_dup = sum(1 for r in plan if r[4] == "duplicate")
+    log(f"{len(plan)} books; {n_ren} titles lose the author or version tags; {n_dup} duplicates (the larger file stays)")
+    log(f"List: {out}")
+    if not apply:
+        log("Nothing changed. Check it, back up metadata.db, stop the Calibre container, then add --apply.")
+        return
+    stage = DATA_DIR / "tidy-rename.csv"
+    with open(stage, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "new title"])
+        w.writerows([(r[0], r[3]) for r in plan if r[4] in ("rename",)])
+    dups = DATA_DIR / "tidy-dups.csv"
+    with open(dups, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["id"])
+        w.writerows([(r[0],) for r in plan if r[4] == "duplicate"])
+    backup = lib / f"metadata.db.before-tidy-{stamp}"
+    shutil.copy2(mdb, backup)
+    log(f"Backed up the database to {backup}")
+    folder.mkdir(parents=True, exist_ok=True)
+    s1 = DATA_DIR / "calibre-titles-apply.py"
+    s1.write_text(CALIBRE_TITLES_APPLY, encoding="utf-8")
+    s2 = DATA_DIR / "calibre-review-move.py"
+    s2.write_text(CALIBRE_REVIEW_MOVE, encoding="utf-8")
+    for cmd in (["calibre-debug", "-e", str(s2), "--", str(lib), str(folder), str(dups)],
+                ["calibre-debug", "-e", str(s1), "--", str(lib), str(stage)]):
+        r = subprocess.run(cmd)
+        if r.returncode:
+            sys.exit(f"calibre-debug failed ({r.returncode})")
+    log("Done. Now run calibre-export again (new folder) to build the clean tree.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2844,6 +2977,9 @@ def main():
     cl.add_argument("--apply", metavar="REPORT_CSV")
     cl.add_argument("--level", choices=["high", "medium"], default="high")
     cl.add_argument("--limit", type=int)
+    ct = sub.add_parser("calibre-tidy")
+    ct.add_argument("library")
+    ct.add_argument("--apply", action="store_true")
     ce = sub.add_parser("calibre-export")
     ce.add_argument("library")
     cs = sub.add_parser("calibre-single-author")
@@ -2899,6 +3035,8 @@ def main():
         cleanup()
     elif a.cmd == "calibre-lookup":
         calibre_lookup(a.library, a.apply, a.level, a.limit)
+    elif a.cmd == "calibre-tidy":
+        calibre_tidy(a.library, a.apply)
     elif a.cmd == "calibre-export":
         calibre_export(a.library)
     elif a.cmd == "calibre-single-author":
