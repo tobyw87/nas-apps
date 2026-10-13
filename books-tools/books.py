@@ -2438,17 +2438,20 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
                         local = (fix_author(m.group(1)), "medium" if (guess or len(parts) >= 3) else "high",
                                  "author written in the title field" + ("; title taken from the title field" if guess else ""))
                         res_title = new_t
-            elif not title_junk and not truncated and a_title and len(t.split()) >= 2 and name_ish(t.strip()) and not t.isupper() and norm(t) != norm(a_title) and \
-                    not re.match(r"(?:the|a|an)\s", t, re.I) and not a_junk and not name_ish(a_title) and len(a_title) >= 3 and \
-                    not re.search(r"[,&;]|\band\b|\|", t) and len(t.split()[-1].strip(".")) >= 3:
-                local = (dot_initials(fix_author(t) or t), "medium", "author is in the title field, title in the author field")
+            elif not title_junk and not truncated and a_title and len(t.split()) >= 2 and not a_junk and len(a_title) >= 3 and \
+                    norm(t) != norm(a_title) and not re.match(r"(?:the|a|an)\s", t, re.I) and \
+                    not re.search(r"[,&;]|\band\b|\|", t) and len(t.split()[-1].strip(".")) >= 3 and \
+                    (name_ish(t.strip()) and not t.isupper() or t.islower()) and \
+                    (not name_ish(a_title) or TITLE_START.match(a_title)):
+                who = dot_initials(fix_author(t.title() if t.islower() else t) or t)
+                local = (who, "high" if norm(who) in known else "medium", "author is in the title field, title in the author field")
                 res_title = lookup_query(a_title)[0]
             if local:
                 author, conf, note = local
                 res_title = pick_title(res_title, None)
             elif len(q) < 3 or q.casefold() in LOOKUP_JUNK or q.isdigit() or LOOKUP_JUNK_RE.match(q):
                 author, conf, note = None, "skip", "title too short or generic"
-            elif by and fix_author(by):
+            elif by and fix_author(by) and len(fix_author(by).split()[-1].strip(".")) >= 3:     # "...by Philip K" is cut off
                 author, conf, note = fix_author(by), "high", "author named in the title"
             else:
                 if q not in cache:
@@ -2479,6 +2482,8 @@ def calibre_lookup(library, apply_csv=None, level="high", limit=None):
                     cased = next((d["title"] for d in cache[q] if norm(d["title"].replace("&", " and ")) == norm(q.replace("&", " and "))), None)
                     res_title = pick_title(q, cased)
             res_title = re.sub(r"\s*\([^)]*$", "", res_title).strip()          # "Quag Keep (AD" -> "Quag Keep"
+            if conf != "skip" and (len(res_title) > 90 or re.search(r"copyright|\u00a9|\(c\)", res_title, re.I)):
+                author, conf, note = None, "low", "the title is a copyright line"
             if conf != "skip" and (title_is_junk(res_title) or res_title.casefold() == "unknown"):
                 author, conf, note = None, "low", "no usable title"
             if author and norm(author) == norm(res_title):
