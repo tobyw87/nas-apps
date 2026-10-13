@@ -1815,7 +1815,7 @@ def tag_rewrite(path, xml):
 
 # ---------------------------------------------------------------- regroup the EPUB Archive
 
-NAME_FORM = re.compile(r"^([^,\-]{1,40}, [^,\-]{1,40}?)(?:\s+-\s+.+)?$")   # "Cherryh, C J" (+ " - Knight 1")
+NAME_FORM = re.compile(r"^((?:(?!\s-\s)[^,]){1,40}, (?:(?!\s-\s)[^,]){1,40}?)(?:\s+-\s+.+)?$")   # "Cherryh, C J" (+ " - Knight 1")
 
 
 AUTHOR_FIRST = re.compile(r"^(?:\(e?book\)\s*)?([A-Z][\w.'-]*(?:\s+[A-Z][\w.'-]*){0,3})\s+-\s+(.+)$")   # "Anne McCaffrey - Pern07 Title"
@@ -2156,9 +2156,14 @@ EXTRA_JUNK_AUTHORS = {"anonymous", "anon", "various", "various authors", "none",
                       "e-book", "default", "author", "a", "the", "index", "contents", "preface", "version", "scan"}
 
 
+TITLE_START = re.compile(r"^(?:the|a|an|this|that|these|those|my|our|your|his|her|their|of|to|in|on|at|for|from|with|how|why|what|when|where)\s", re.I)
+
+
 def no_real_author(a, t, per):
     """True when a Calibre 'author' is really the title, a junk word, a scanner's name or a stub."""
     n = norm(a)
+    if TITLE_START.match(clean_text(a or "")):
+        return True                                       # "The Black Gryphon" is a title, not a person
     if n == norm(t) or a.casefold() in JUNK_AUTHORS or a.casefold().strip(". ") in EXTRA_JUNK_AUTHORS:
         return True
     if len(re.sub(r"\W", "", a)) <= 2 or a.lstrip()[:1] in "_.([<{-":
@@ -2593,7 +2598,7 @@ def calibre_review(library, apply, strict=False):
         per[norm(a)] = per.get(norm(a), 0) + 1
     def not_a_person(a):
         a = clean_text((a or "").replace("|", ","))
-        return (not name_ish(a) or bool(re.search(r"\d", a))
+        return (not name_ish(a) or bool(re.search(r"\d", a)) or bool(TITLE_START.match(a))
                 or (" " not in a.strip() and per.get(norm(a), 0) < 5))          # a lone word: only if it has 5+ books
 
     def swapped(a, t):
