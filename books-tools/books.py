@@ -2593,9 +2593,19 @@ def calibre_review(library, apply, strict=False):
         per[norm(a)] = per.get(norm(a), 0) + 1
     def not_a_person(a):
         a = clean_text((a or "").replace("|", ","))
-        return not name_ish(a) or bool(re.search(r"\d", a))
+        return (not name_ish(a) or bool(re.search(r"\d", a))
+                or (" " not in a.strip() and per.get(norm(a), 0) < 5))          # a lone word: only if it has 5+ books
+
+    def swapped(a, t):
+        # the title field holds "Last, First - ..." but the author is something else: author and title are swapped
+        m = NAME_FORM.match(clean_text(t or ""))
+        if not m:
+            return False
+        last, _, first = m.group(1).partition(", ")
+        who = fix_author(m.group(1))
+        return bool(name_ish(last) and name_ish(first) and who and norm(who) not in norm(first_author(a) or ""))
     bad = [(i, t, a) for i, t, a in books
-           if no_real_author(a, t, per) or title_is_junk(t) or (strict and not_a_person(a))]
+           if no_real_author(a, t, per) or title_is_junk(t) or (strict and (not_a_person(a) or swapped(a, t)))]
     if strict:
         odd = {}
         for _, _, a in bad:
@@ -2687,10 +2697,23 @@ def calibre_single_author(library, apply):
     for al in names.values():
         count[al[0]] = count.get(al[0], 0) + 1
     changes = []
+    full = {norm(a): a for a, n in count.items() if n >= 3 and " " in a.strip()}    # full names the library already uses
     for i, al in sorted(names.items()):
         cur = al[0]
         new = cur
-        if len(al) > 1 or re.search(r"[;&|,]|\sand\s|\(", cur):
+        if len(al) > 1 and " " not in cur.strip():
+            # Calibre split one author into pieces ("Turtledove" + "Harry", "Isaac" + "Janet Asimov"): rebuild only
+            # when that full name already exists in the library
+            if " " in al[1].strip():
+                opts = [f"{cur} {al[1].split()[-1]}"]
+            elif len(al) == 2:
+                opts = [f"{al[1]} {cur}", f"{cur} {al[1]}"]
+            else:
+                opts = []
+            new = next((full[norm(o)] for o in opts if norm(o) in full), None)
+            if not new:
+                continue
+        elif len(al) > 1 or re.search(r"[;&|,]|\sand\s|\(", cur):
             new = first_author(cur)
             if not new or new.casefold() in (JUNK_AUTHORS | EXTRA_JUNK_AUTHORS) or not name_ish(new):
                 continue                                    # not a person: left for calibre-review --strict
