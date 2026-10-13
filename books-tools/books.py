@@ -1830,6 +1830,7 @@ def name_ish(s):
     parts = [x.strip() for x in re.split(r"\s*(?:;|&|\band\b|\|)\s*", s) if x.strip()]
     if len(parts) > 1:
         return all(name_ish(x) for x in parts)
+    s = re.sub(r"\s*['\u2018\u2019\"\u201c\u201d][^'\u2018\u2019\"\u201c\u201d\s]{1,15}['\u2018\u2019\"\u201c\u201d]\s*", " ", s).strip()   # E. E. 'Doc' Smith
     words = re.sub(r",?\s*(?:jr|sr|ii|iii|iv|phd|md)\.?$", "", s.strip(), flags=re.I).split()
     return (1 <= len(words) <= 4 and not re.search(r"[\d:;()\[\]]", s)
             and all(w[:1].isupper() or w in NAME_PARTICLES for w in words))
@@ -2642,15 +2643,32 @@ d.close()
 """
 
 
+ROLE_TAG = re.compile(r"\s*\((?:rsv|editor|editors|ed\.?|translator|illustrator|ill\.?|trans\.?)\)\s*$", re.I)
+NAME_SUFFIX = {"jr", "sr", "ii", "iii", "iv", "phd", "md"}
+
+
 def first_author(name):
-    """'Ayn Rand; Leonard Peikoff', 'Weis| Margaret; Hickman| Tracy', 'Weis and Hickman' -> the first person, 'First Last'."""
-    a = clean_text(name.replace("|", ","))
-    parts = [x.strip() for x in re.split(r"\s*;\s*|\s+&\s+", a) if x.strip()]
-    if len(parts) == 1:
-        m = re.match(r"^(.+?)\s+and\s+(.+)$", parts[0])
-        if m and name_ish(m.group(1)) and name_ish(m.group(2)):
-            parts = [m.group(1)]
-    return fix_author(parts[0]) if parts else None
+    """'Ayn Rand; Leonard Peikoff', 'Michael A. Martin| Andy Mangels' (comma = two people), 'Rabe| Jean' (Last, First),
+    'Weis and Hickman', 'Anne McCaffrey (rsv)' -> the first person as 'First Last'."""
+    a = clean_text(name)
+    a = ROLE_TAG.sub("", a)
+    seg = [x.strip() for x in re.split(r"\s*;\s*|\s+&\s+", a) if x.strip()]
+    if not seg:
+        return None
+    seg = seg[0]
+    m = re.match(r"^(.+?)\s+and\s+(.+)$", seg)
+    if m and name_ish(m.group(1)) and name_ish(m.group(2)):
+        seg = m.group(1)
+    parts = [x.strip(" -") for x in re.split(r"[|,]", seg) if x.strip(" -")]
+    if not parts:
+        return None
+    if len(parts) >= 2 and " " not in parts[0] and parts[1].casefold().strip(".") not in NAME_SUFFIX:
+        seg = f"{parts[1]} {parts[0]}"                     # "Foster| Alan Dean" -> "Alan Dean Foster"
+    elif len(parts) >= 2 and parts[1].casefold().strip(".") in NAME_SUFFIX:
+        seg = f"{parts[0]} {parts[1]}"                     # "Modesitt| Jr." stays
+    else:
+        seg = parts[0]                                      # "Michael A. Martin| Andy Mangels" -> the first person
+    return fix_author(seg)
 
 
 def calibre_single_author(library, apply):
@@ -2671,17 +2689,19 @@ def calibre_single_author(library, apply):
     changes = []
     for i, al in sorted(names.items()):
         cur = al[0]
-        if len(al) == 1 and not re.search(r"[;&|,]|\sand\s", cur):
-            continue
-        new = first_author(cur)
-        if not new or new.casefold() in (JUNK_AUTHORS | EXTRA_JUNK_AUTHORS) or (len(al) == 1 and new == cur):
-            continue
+        new = cur
+        if len(al) > 1 or re.search(r"[;&|,]|\sand\s|\(", cur):
+            new = first_author(cur)
+            if not new or new.casefold() in (JUNK_AUTHORS | EXTRA_JUNK_AUTHORS) or not name_ish(new):
+                continue                                    # not a person: left for calibre-review --strict
         changes.append((i, titles.get(i, ""), " ; ".join(al), new))
     # one spelling per person: the one most books already use
     spell = {}
     for al in names.values():
         spell.setdefault(norm(al[0]), {}).setdefault(al[0], 0)
         spell[norm(al[0])][al[0]] += 1
+    for i, t, cur, new in list(changes):
+        spell.setdefault(norm(new), {}).setdefault(new, 0)
     final = []
     for i, t, cur, new in changes:
         opts = spell.get(norm(new))
