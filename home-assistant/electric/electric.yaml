@@ -287,6 +287,7 @@ automation:
           closed_label: "{{ states('input_text.electric_closed_label') }}"
           final: "{{ 22 <= now().day <= 28 }}"
           wlabel: "{{ now().strftime('%-m/%-d') }}"
+          cur_label: "{{ (now() if now().day < 29 else now() + timedelta(days=5)).strftime('%b') }}"
           comed_cost: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_cost_to_date') | float(0) }}"
           comed_fc: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_forecasted_cost') | float(0) }}"
           wk: >
@@ -302,7 +303,7 @@ automation:
             {% if closed %}Bill cycle complete ({{ closed_label }}): {{ closed_total | round(0) | int }} kWh, ${{ '%.2f' | format(closed_cost) }}{% endif %}
           data:
             html: >-
-              {% from 'electric.jinja' import weekly_html %}{{ weekly_html(dict(used=used, proj=proj, budget=budget, rate=rate, fixed=fixed, hist=hist, whist=whist, wk=wk, wlabel=wlabel, closed=closed, closed_label=closed_label, closed_total=closed_total, closed_cost=closed_cost, closed_budget=closed_budget, closed_days=closed_days, final=final, comed_cost=comed_cost, comed_fc=comed_fc)) }}
+              {% from 'electric.jinja' import weekly_html %}{{ weekly_html(dict(used=used, proj=proj, budget=budget, rate=rate, fixed=fixed, hist=hist, whist=whist, wk=wk, wlabel=wlabel, cur_label=cur_label, closed=closed, closed_label=closed_label, closed_total=closed_total, closed_cost=closed_cost, closed_budget=closed_budget, closed_days=closed_days, final=final, comed_cost=comed_cost, comed_fc=comed_fc)) }}
       - if:
           - condition: template
             value_template: "{{ wk >= 0 }}"

@@ -8,7 +8,7 @@
 </tr>
 {%- endmacro %}
 
-{% macro history_chart(hist, label, value, color) -%}
+{% macro history_chart(hist, label, value, color, caption='') -%}
 {% set ns = namespace(top=value) -%}
 {% for item in hist.split(',') if ':' in item -%}
 {% if item.split(':')[1] | float(0) > ns.top %}{% set ns.top = item.split(':')[1] | float(0) %}{% endif -%}
@@ -19,6 +19,7 @@
 {% endfor -%}
 {{ bar(label, value, ns.top, color) }}
 </table>
+{% if caption %}<div style="padding-top:6px;color:#6b7280;font-size:12px">{{ caption }}</div>{% endif %}
 {%- endmacro %}
 
 {% macro top(accent, title, headline, subline) -%}
@@ -79,7 +80,7 @@ Usage and cost come from your ComEd account through Home Assistant and usually r
 <div style="padding-top:6px;color:#6b7280;font-size:12px">Estimated bill = about ${{ fixed | round(0) | int }} in fixed charges plus ${{ rate }} per kWh.</div>
 </td></tr>
 {{ section('Compared with recent cycles') }}
-<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(hist, 'Forecast', proj, '#dc2626') }}</td></tr>
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(hist, ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][month - 1] ~ ' (forecast)', proj, '#dc2626', "Past cycles are final totals from your bills. The last bar is ComEd's projection for the cycle still in progress.") }}</td></tr>
 <tr><td style="padding:0 20px 4px 20px;color:#4b5563;font-size:13px;line-height:1.5"><strong>Tip:</strong> {{ tip }}</td></tr>
 {{ bottom(rate, fixed) }}
 {%- endmacro %}
@@ -171,9 +172,9 @@ Usage and cost come from your ComEd account through Home Assistant and usually r
 {% endif -%}
 {{ section('Recent bill cycles') }}
 {% if d.closed -%}
-<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.hist.split(',')[:-1] | join(','), d.closed_label, d.closed_total, ccolor) }}</td></tr>
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.hist.split(',')[:-1] | join(','), d.closed_label, d.closed_total, ccolor, 'All bars are final totals from your bills.') }}</td></tr>
 {% else -%}
-<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.hist, 'Forecast', d.proj, accent) }}</td></tr>
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.hist, d.cur_label ~ ' (forecast)', d.proj, accent, "Past cycles are final totals from your bills. The last bar is ComEd's projection for the cycle still in progress.") }}</td></tr>
 {% endif -%}
 {{ section('The numbers') }}
 <tr><td style="padding:6px 20px 12px 20px">
