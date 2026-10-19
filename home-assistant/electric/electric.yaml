@@ -1,0 +1,203 @@
+# Electric budget alerts and bill-cycle summaries (Home Assistant package).
+# Goes in <config>/packages/electric.yaml. Email layouts live in <config>/custom_templates/electric.jinja.
+input_number:
+  electric_alert_pct:
+    name: Electric alert percent over budget
+    min: 5
+    max: 100
+    step: 1
+    initial: 15
+    unit_of_measurement: "%"
+  electric_alert_dollars:
+    name: Electric alert dollars over budget
+    min: 5
+    max: 300
+    step: 1
+    initial: 20
+    unit_of_measurement: "USD"
+  electric_rate:
+    name: Electric cost per extra kWh
+    min: 0.05
+    max: 0.5
+    step: 0.001
+    initial: 0.163
+    unit_of_measurement: "USD/kWh"
+  electric_last_usage:
+    name: Electric last cycle usage seen
+    min: 0
+    max: 10000
+    step: 0.1
+  electric_last_cost:
+    name: Electric last cycle cost seen
+    min: 0
+    max: 5000
+    step: 0.01
+
+input_text:
+  electric_alert_month:
+    name: Electric alert last sent month
+    max: 10
+  electric_history:
+    name: Electric cycle history (label:kWh, newest last)
+    max: 255
+    initial: "Jul:321,Aug:423,Sep:455"
+
+input_datetime:
+  electric_cycle_start:
+    name: Electric cycle start
+    has_date: true
+    has_time: false
+
+template:
+  - sensor:
+      - name: "Electric Monthly Budget"
+        unique_id: electric_monthly_budget
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total
+        state: >
+          {% set b = [750,650,600,450,400,400,400,450,450,320,520,700] %}
+          {{ b[(now().month if now().day < 29 else now().month % 12 + 1) - 1] }}
+      - name: "Electric Rate Per kWh"
+        unique_id: electric_rate_per_kwh
+        unit_of_measurement: "USD/kWh"
+        state: "{{ states('input_number.electric_rate') | float(0.163) }}"
+
+automation:
+  - id: electric_budget_alert
+    alias: Electric budget alert
+    mode: single
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.elec_account_07249118370720160943_current_bill_electric_forecasted_usage
+          - sensor.elec_account_07249118370720160943_current_bill_electric_usage_to_date
+    variables:
+      used: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_usage_to_date') | float(0) }}"
+      proj: "{{ [states('sensor.elec_account_07249118370720160943_current_bill_electric_forecasted_usage') | float(0), used] | max }}"
+      budget: "{{ states('sensor.electric_monthly_budget') | float(0) }}"
+      rate: "{{ states('sensor.electric_rate_per_kwh') | float(0.163) }}"
+      mult: "{{ 2 if now().day >= 26 else 1 }}"
+      over: "{{ proj - budget }}"
+      pct: "{{ states('input_number.electric_alert_pct') | float(15) }}"
+      dollars: "{{ states('input_number.electric_alert_dollars') | float(20) }}"
+    condition:
+      - condition: template
+        value_template: "{{ budget > 0 and used > 0 }}"
+      - condition: template
+        value_template: "{{ states('input_text.electric_alert_month') != now().strftime('%Y-%m') }}"
+      - condition: template
+        value_template: >
+          {{ used > budget or (over >= pct / 100 * budget * mult and over * rate >= dollars * mult) }}
+    action:
+      - service: notify.email_alerts
+        data:
+          title: "Electric usage alert"
+          message: |
+            Your electric usage is trending over budget this billing cycle.
+
+            Used so far: {{ used | round(0) }} kWh
+            Utility forecast for the cycle: {{ proj | round(0) }} kWh
+            Budget for {{ now().strftime('%B') }}: {{ budget | round(0) }} kWh
+            Projected overage: {{ over | round(0) }} kWh (about ${{ (over * rate) | round(0) }} at ${{ rate }}/kWh)
+          data:
+            html: "{% from 'electric.jinja' import alert_html %}{{ alert_html(used, proj, budget, rate, states('input_text.electric_history'), now().month) }}"
+      - service: persistent_notification.create
+        data:
+          title: "Electric usage alert"
+          notification_id: electric_alert
+          message: "Forecast {{ proj | round(0) }} kWh vs budget {{ budget | round(0) }} kWh (about ${{ (over * rate) | round(0) }} over)."
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.electric_alert_month
+        data:
+          value: "{{ now().strftime('%Y-%m') }}"
+
+  - id: electric_cycle_summary
+    alias: Electric cycle summary
+    mode: queued
+    trigger:
+      - platform: state
+        entity_id: sensor.elec_account_07249118370720160943_current_bill_electric_usage_to_date
+        id: usage
+      - platform: state
+        entity_id: sensor.elec_account_07249118370720160943_current_bill_electric_cost_to_date
+        id: cost
+    variables:
+      new: "{{ trigger.to_state.state | float(0) }}"
+      old: "{{ trigger.from_state.state | float(0) }}"
+    action:
+      - choose:
+          - conditions:
+              - condition: trigger
+                id: usage
+              - condition: template
+                value_template: "{{ new < old - 5 }}"
+            sequence:
+              - variables:
+                  total: "{{ states('input_number.electric_last_usage') | float(0) }}"
+                  cost: "{{ states('input_number.electric_last_cost') | float(0) }}"
+                  ended: "{{ now() - timedelta(days=3) }}"
+                  label: "{{ ended.strftime('%b') }}"
+                  budget: "{{ [750,650,600,450,400,400,400,450,450,320,520,700][ended.month - 1] }}"
+                  rate: "{{ states('sensor.electric_rate_per_kwh') | float(0.163) }}"
+                  hist: "{{ states('input_text.electric_history') }}"
+                  start: "{{ states('input_datetime.electric_cycle_start') }}"
+                  days: >
+                    {% if start[:4] | int(0) > 2000 %}{{ (now().date() - strptime(start, '%Y-%m-%d').date()).days }}{% else %}0{% endif %}
+              - service: notify.email_alerts
+                data:
+                  title: "Electric bill cycle summary"
+                  message: |
+                    Your billing cycle just ended.
+
+                    Total usage: {{ total | round(0) }} kWh
+                    Cost: ${{ '%.2f' | format(cost) }}{% if total > 0 %} (${{ (cost / total) | round(3) }}/kWh){% endif %}
+                    Budget for {{ ended.strftime('%B') }}: {{ budget }} kWh
+                    Versus budget: {{ (total - budget) | round(0) }} kWh ({{ ((total - budget) / budget * 100) | round(0) }}%)
+                    {% if days > 0 %}Cycle length: {{ days }} days, about {{ (total / days) | round(1) }} kWh/day{% endif %}
+                  data:
+                    html: "{% from 'electric.jinja' import summary_html %}{{ summary_html(total, cost, budget, days, hist, label, rate) }}"
+              - service: input_text.set_value
+                target:
+                  entity_id: input_text.electric_history
+                data:
+                  value: >
+                    {{ ((hist.split(',') if hist else []) + [label ~ ':' ~ (total | round(0) | int)])[-6:] | join(',') }}
+              - service: input_datetime.set_datetime
+                target:
+                  entity_id: input_datetime.electric_cycle_start
+                data:
+                  date: "{{ now().strftime('%Y-%m-%d') }}"
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_last_usage
+                data:
+                  value: "{{ new }}"
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_last_cost
+                data:
+                  value: 0
+          - conditions:
+              - condition: trigger
+                id: usage
+              - condition: template
+                value_template: "{{ new > old }}"
+            sequence:
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_last_usage
+                data:
+                  value: "{{ new }}"
+          - conditions:
+              - condition: trigger
+                id: cost
+              - condition: template
+                value_template: "{{ new > old }}"
+            sequence:
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_last_cost
+                data:
+                  value: "{{ new }}"

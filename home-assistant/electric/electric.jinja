@@ -1,0 +1,109 @@
+{# Email layouts for the electric alerts. Presentation only: every number is passed in. #}
+
+{% macro bar(label, value, scale, color) -%}
+<tr>
+<td style="padding:4px 10px 4px 0;font-size:13px;color:#374151;white-space:nowrap">{{ label }}</td>
+<td style="padding:4px 0;width:100%"><div style="background:#e5e7eb;border-radius:4px"><div style="background:{{ color }};height:16px;border-radius:4px;width:{{ [[(value / ([scale, 1] | max) * 100) | round(0), 2] | max, 100] | min }}%">&nbsp;</div></div></td>
+<td style="padding:4px 0 4px 10px;font-size:13px;color:#111827;white-space:nowrap;text-align:right">{{ value | round(0) | int }} kWh</td>
+</tr>
+{%- endmacro %}
+
+{% macro history_chart(hist, label, value, color) -%}
+{% set ns = namespace(top=value) -%}
+{% for item in hist.split(',') if ':' in item -%}
+{% if item.split(':')[1] | float(0) > ns.top %}{% set ns.top = item.split(':')[1] | float(0) %}{% endif -%}
+{% endfor -%}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+{% for item in hist.split(',') if ':' in item -%}
+{{ bar(item.split(':')[0], item.split(':')[1] | float(0), ns.top, '#94a3b8') }}
+{% endfor -%}
+{{ bar(label, value, ns.top, color) }}
+</table>
+{%- endmacro %}
+
+{% macro top(accent, title, headline, subline) -%}
+<div style="background:#f3f4f6;padding:16px 8px;font-family:Arial,Helvetica,sans-serif">
+<table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:8px;border-collapse:separate;overflow:hidden">
+<tr><td style="background:{{ accent }};padding:16px 20px;color:#ffffff;font-size:13px;letter-spacing:1px;text-transform:uppercase">&#9889; {{ title }}</td></tr>
+<tr><td style="padding:20px 20px 4px 20px;color:#111827;font-size:20px;font-weight:bold;line-height:1.3">{{ headline }}</td></tr>
+<tr><td style="padding:0 20px 16px 20px;color:#4b5563;font-size:14px;line-height:1.5">{{ subline }}</td></tr>
+{%- endmacro %}
+
+{% macro section(heading) -%}
+<tr><td style="padding:8px 20px 0 20px;color:#111827;font-size:14px;font-weight:bold">{{ heading }}</td></tr>
+{%- endmacro %}
+
+{% macro bottom(rate) -%}
+<tr><td style="padding:20px">
+<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px 14px;color:#6b7280;font-size:12px;line-height:1.5">
+<strong style="color:#374151">About these numbers</strong><br>
+Usage and cost come from your ComEd account through Home Assistant and usually run a day or more behind real use. "Forecast" is ComEd's own projection for the current bill cycle, not a guarantee. "Budget" is a kWh target estimated for your apartment for each month; it is not a ComEd figure, and a month's label means the bill cycle that ends in that month (cycles end around the 28th). Dollar amounts for extra usage assume about ${{ rate }} per kWh and leave out fixed monthly charges, so they are estimates. Your ComEd bill is the final word.
+</div></td></tr>
+</table></div>
+{%- endmacro %}
+
+{% macro alert_html(used, proj, budget, rate, hist, month) -%}
+{% set over = proj - budget -%}
+{% set pct = (over / budget * 100) | round(0) | int -%}
+{% set scale = [used, proj, budget] | max -%}
+{% if used > budget -%}
+{% set headline = "You've already passed this cycle's budget" -%}
+{% set sub = "Usage so far is " ~ (used | round(0) | int) ~ " kWh against a " ~ (budget | round(0) | int) ~ " kWh budget, with the cycle still running." -%}
+{% else -%}
+{% set headline = "On pace for about " ~ (proj | round(0) | int) ~ " kWh, " ~ pct ~ "% over budget" -%}
+{% set sub = "That is roughly " ~ (over | round(0) | int) ~ " kWh, or about $" ~ ((over * rate) | round(0) | int) ~ " more than planned if the pace holds." -%}
+{% endif -%}
+{% if month in [11, 12, 1, 2, 3] -%}
+{% set tip = "Heating season: with three PTAC units on electric heat, turning the heat down or off in rooms you are not using is usually the biggest lever." -%}
+{% elif month in [6, 7, 8, 9] -%}
+{% set tip = "Cooling season: shading windows and running only the PTAC unit in the room you are using usually helps most." -%}
+{% else -%}
+{% set tip = "Mild weather: if usage is high now, check for anything left running, such as a PTAC unit in an empty room." -%}
+{% endif -%}
+{{ top('#dc2626', 'Electric usage alert', headline, sub) }}
+{{ section('This cycle') }}
+<tr><td style="padding:6px 20px 12px 20px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+{{ bar('Used so far', used, scale, '#2563eb') }}
+{{ bar('ComEd forecast', proj, scale, '#dc2626') }}
+{{ bar('Budget', budget, scale, '#6b7280') }}
+</table></td></tr>
+{{ section('Compared with recent cycles') }}
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(hist, 'Forecast', proj, '#dc2626') }}</td></tr>
+<tr><td style="padding:0 20px 4px 20px;color:#4b5563;font-size:13px;line-height:1.5"><strong>Tip:</strong> {{ tip }}</td></tr>
+{{ bottom(rate) }}
+{%- endmacro %}
+
+{% macro summary_html(total, cost, budget, days, hist, label, rate) -%}
+{% set diff = total - budget -%}
+{% set pct = (diff / budget * 100) | abs | round(0) | int -%}
+{% set prev = hist.split(',')[-1].split(':')[1] | float(0) if ':' in hist else 0 -%}
+{% set scale = [total, budget] | max -%}
+{% if diff > 0 -%}
+{% set accent = '#dc2626' -%}
+{% set headline = label ~ " cycle: " ~ (total | round(0) | int) ~ " kWh, " ~ pct ~ "% over budget" -%}
+{% else -%}
+{% set accent = '#16a34a' -%}
+{% set headline = label ~ " cycle: " ~ (total | round(0) | int) ~ " kWh, " ~ pct ~ "% under budget" -%}
+{% endif -%}
+{% set sub = "Your billing cycle just ended. The total came to about $" ~ ('%.2f' | format(cost)) ~ "." -%}
+{{ top(accent, 'Electric cycle summary', headline, sub) }}
+{{ section('Used vs budget') }}
+<tr><td style="padding:6px 20px 12px 20px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+{{ bar('Used', total, scale, accent) }}
+{{ bar('Budget', budget, scale, '#6b7280') }}
+</table></td></tr>
+{{ section('Recent cycles') }}
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(hist, label, total, accent) }}</td></tr>
+{{ section('The details') }}
+<tr><td style="padding:6px 20px 12px 20px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;color:#374151">
+<tr><td style="padding:4px 0">Total cost</td><td style="text-align:right">${{ '%.2f' | format(cost) }}</td></tr>
+{% if total > 0 %}<tr><td style="padding:4px 0">Average cost per kWh (all-in)</td><td style="text-align:right">${{ (cost / total) | round(3) }}</td></tr>{% endif %}
+{% if days > 0 %}<tr><td style="padding:4px 0">Cycle length</td><td style="text-align:right">{{ days }} days</td></tr>
+<tr><td style="padding:4px 0">Average per day</td><td style="text-align:right">{{ (total / days) | round(1) }} kWh</td></tr>{% endif %}
+{% if prev > 0 %}<tr><td style="padding:4px 0">Change from previous cycle</td><td style="text-align:right">{{ ((total - prev) / prev * 100) | round(0) | int }}%</td></tr>{% endif %}
+</table></td></tr>
+{{ bottom(rate) }}
+{%- endmacro %}
