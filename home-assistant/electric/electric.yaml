@@ -313,7 +313,7 @@ automation:
               entity_id: input_text.electric_week_history
             data:
               value: >
-                {{ ((whist.split(',') if whist else []) + [wlabel ~ ':' ~ (wk | round(0) | int)])[-8:] | join(',') }}
+                {% set ns = namespace(items=[]) %}{% for i in whist.split(',') if i and not i.startswith(wlabel ~ ':') %}{% set ns.items = ns.items + [i] %}{% endfor %}{{ (ns.items + [wlabel ~ ':' ~ (wk | round(0) | int)])[-8:] | join(',') }}
       - service: input_number.set_value
         target:
           entity_id: input_number.electric_week_start_usage

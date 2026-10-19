@@ -166,9 +166,13 @@ Usage and cost come from your ComEd account through Home Assistant and usually r
 {{ bar('ComEd forecast', d.proj, scale, accent, '$' ~ ((d.proj * rate) | round(0) | int)) }}
 {{ bar('Budget', d.budget, scale, '#6b7280', '$' ~ ((d.budget * rate) | round(0) | int)) }}
 </table></td></tr>
-{% if d.wk >= 0 and ':' in d.whist -%}
+{% set wns = namespace(items=[]) -%}
+{% for i in d.whist.split(',') if ':' in i and not i.startswith(d.wlabel ~ ':') -%}
+{% set wns.items = wns.items + [i] -%}
+{% endfor -%}
+{% if d.wk >= 0 and wns.items | length > 0 -%}
 {{ section('Week by week') }}
-<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.whist, d.wlabel, d.wk, accent) }}</td></tr>
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(wns.items | join(','), d.wlabel, d.wk, accent, 'Each bar is the kWh ComEd recorded between one Friday report and the next, dated by the report. The last bar is this week.') }}</td></tr>
 {% endif -%}
 {{ section('Recent bill cycles') }}
 {% if d.closed -%}
