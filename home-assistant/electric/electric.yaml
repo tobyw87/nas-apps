@@ -98,7 +98,7 @@ input_text:
   electric_weather_entity:
     name: Electric weather entity for outdoor temperature
     max: 100
-    initial: "weather.home"
+    initial: "weather.forecast_home"
   electric_temp_history:
     name: Electric cycle average temperature (label:degF, newest last)
     max: 255
