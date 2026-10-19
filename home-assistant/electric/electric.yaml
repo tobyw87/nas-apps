@@ -22,6 +22,38 @@ input_number:
     step: 0.001
     initial: 0.163
     unit_of_measurement: "USD/kWh"
+  electric_fixed_charge:
+    name: Electric fixed monthly charges (estimate)
+    min: 0
+    max: 100
+    step: 0.1
+    initial: 17.1
+    unit_of_measurement: "USD"
+  electric_week_start_usage:
+    name: Electric usage at last weekly report
+    min: 0
+    max: 10000
+    step: 0.1
+  electric_closed_total:
+    name: Electric closed cycle usage
+    min: 0
+    max: 10000
+    step: 0.1
+  electric_closed_cost:
+    name: Electric closed cycle cost
+    min: 0
+    max: 5000
+    step: 0.01
+  electric_closed_budget:
+    name: Electric closed cycle budget
+    min: 0
+    max: 10000
+    step: 1
+  electric_closed_days:
+    name: Electric closed cycle length
+    min: 0
+    max: 70
+    step: 1
   electric_last_usage:
     name: Electric last cycle usage seen
     min: 0
@@ -37,10 +69,20 @@ input_text:
   electric_alert_month:
     name: Electric alert last sent month
     max: 10
+  electric_closed_label:
+    name: Electric closed cycle label
+    max: 10
+  electric_week_history:
+    name: Electric weekly history (label:kWh, newest last)
+    max: 255
   electric_history:
     name: Electric cycle history (label:kWh, newest last)
     max: 255
     initial: "Jul:321,Aug:423,Sep:455"
+
+input_boolean:
+  electric_cycle_closed_pending:
+    name: Electric closed cycle not yet reported
 
 input_datetime:
   electric_cycle_start:
@@ -100,8 +142,9 @@ automation:
             Utility forecast for the cycle: {{ proj | round(0) }} kWh
             Budget for {{ now().strftime('%B') }}: {{ budget | round(0) }} kWh
             Projected overage: {{ over | round(0) }} kWh (about ${{ (over * rate) | round(0) }} at ${{ rate }}/kWh)
+            Estimated bill at the forecast: ${{ (states('input_number.electric_fixed_charge') | float(17.1) + proj * rate) | round(0) }}
           data:
-            html: "{% from 'electric.jinja' import alert_html %}{{ alert_html(used, proj, budget, rate, states('input_text.electric_history'), now().month) }}"
+            html: "{% from 'electric.jinja' import alert_html %}{{ alert_html(used, proj, budget, rate, states('input_number.electric_fixed_charge') | float(17.1), states('input_text.electric_history'), now().month, states('sensor.elec_account_07249118370720160943_current_bill_electric_cost_to_date') | float(0), states('sensor.elec_account_07249118370720160943_current_bill_electric_forecasted_cost') | float(0)) }}"
       - service: persistent_notification.create
         data:
           title: "Electric usage alert"
@@ -114,7 +157,7 @@ automation:
           value: "{{ now().strftime('%Y-%m') }}"
 
   - id: electric_cycle_summary
-    alias: Electric cycle summary
+    alias: Electric cycle bookkeeping
     mode: queued
     trigger:
       - platform: state
@@ -140,24 +183,38 @@ automation:
                   ended: "{{ now() - timedelta(days=3) }}"
                   label: "{{ ended.strftime('%b') }}"
                   budget: "{{ [750,650,600,450,400,400,400,450,450,320,520,700][ended.month - 1] }}"
-                  rate: "{{ states('sensor.electric_rate_per_kwh') | float(0.163) }}"
                   hist: "{{ states('input_text.electric_history') }}"
                   start: "{{ states('input_datetime.electric_cycle_start') }}"
                   days: >
                     {% if start[:4] | int(0) > 2000 %}{{ (now().date() - strptime(start, '%Y-%m-%d').date()).days }}{% else %}0{% endif %}
-              - service: notify.email_alerts
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_closed_total
                 data:
-                  title: "Electric bill cycle summary"
-                  message: |
-                    Your billing cycle just ended.
-
-                    Total usage: {{ total | round(0) }} kWh
-                    Cost: ${{ '%.2f' | format(cost) }}{% if total > 0 %} (${{ (cost / total) | round(3) }}/kWh){% endif %}
-                    Budget for {{ ended.strftime('%B') }}: {{ budget }} kWh
-                    Versus budget: {{ (total - budget) | round(0) }} kWh ({{ ((total - budget) / budget * 100) | round(0) }}%)
-                    {% if days > 0 %}Cycle length: {{ days }} days, about {{ (total / days) | round(1) }} kWh/day{% endif %}
-                  data:
-                    html: "{% from 'electric.jinja' import summary_html %}{{ summary_html(total, cost, budget, days, hist, label, rate) }}"
+                  value: "{{ total }}"
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_closed_cost
+                data:
+                  value: "{{ cost }}"
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_closed_budget
+                data:
+                  value: "{{ budget }}"
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_closed_days
+                data:
+                  value: "{{ [days, 70] | min }}"
+              - service: input_text.set_value
+                target:
+                  entity_id: input_text.electric_closed_label
+                data:
+                  value: "{{ label }}"
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.electric_cycle_closed_pending
               - service: input_text.set_value
                 target:
                   entity_id: input_text.electric_history
@@ -201,3 +258,66 @@ automation:
                   entity_id: input_number.electric_last_cost
                 data:
                   value: "{{ new }}"
+
+  - id: electric_weekly_summary
+    alias: Electric weekly summary (Friday 4 PM)
+    mode: single
+    trigger:
+      - platform: time
+        at: "16:00:00"
+    condition:
+      - condition: time
+        weekday:
+          - fri
+    action:
+      - variables:
+          used: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_usage_to_date') | float(0) }}"
+          proj: "{{ [states('sensor.elec_account_07249118370720160943_current_bill_electric_forecasted_usage') | float(0), used] | max }}"
+          budget: "{{ states('sensor.electric_monthly_budget') | float(0) }}"
+          rate: "{{ states('sensor.electric_rate_per_kwh') | float(0.163) }}"
+          fixed: "{{ states('input_number.electric_fixed_charge') | float(17.1) }}"
+          hist: "{{ states('input_text.electric_history') }}"
+          whist: "{{ states('input_text.electric_week_history') }}"
+          ws: "{{ states('input_number.electric_week_start_usage') | float(0) }}"
+          closed: "{{ is_state('input_boolean.electric_cycle_closed_pending', 'on') }}"
+          closed_total: "{{ states('input_number.electric_closed_total') | float(0) }}"
+          closed_cost: "{{ states('input_number.electric_closed_cost') | float(0) }}"
+          closed_budget: "{{ states('input_number.electric_closed_budget') | float(0) }}"
+          closed_days: "{{ states('input_number.electric_closed_days') | float(0) }}"
+          closed_label: "{{ states('input_text.electric_closed_label') }}"
+          final: "{{ 22 <= now().day <= 28 }}"
+          wlabel: "{{ now().strftime('%-m/%-d') }}"
+          comed_cost: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_cost_to_date') | float(0) }}"
+          comed_fc: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_forecasted_cost') | float(0) }}"
+          wk: >
+            {% if ws <= 0 %}-1{% elif used >= ws %}{{ used - ws }}{% else %}{{ (closed_total - ws) + used }}{% endif %}
+      - service: notify.email_alerts
+        data:
+          title: "{{ 'Electric month-end recap' if final else 'Electric weekly summary' }}"
+          message: |
+            {% if wk >= 0 %}This week: {{ wk | round(0) | int }} kWh (about ${{ (wk * rate) | round(0) | int }}){% else %}First weekly report: weekly figures start next Friday{% endif %}
+            Cycle so far: {{ used | round(0) | int }} kWh (about ${{ (used * rate) | round(0) | int }})
+            ComEd forecast: {{ proj | round(0) | int }} kWh vs budget {{ budget | round(0) | int }} kWh
+            Estimated bill at the forecast: ${{ (fixed + proj * rate) | round(0) | int }}
+            {% if closed %}Bill cycle complete ({{ closed_label }}): {{ closed_total | round(0) | int }} kWh, ${{ '%.2f' | format(closed_cost) }}{% endif %}
+          data:
+            html: >-
+              {% from 'electric.jinja' import weekly_html %}{{ weekly_html(dict(used=used, proj=proj, budget=budget, rate=rate, fixed=fixed, hist=hist, whist=whist, wk=wk, wlabel=wlabel, closed=closed, closed_label=closed_label, closed_total=closed_total, closed_cost=closed_cost, closed_budget=closed_budget, closed_days=closed_days, final=final, comed_cost=comed_cost, comed_fc=comed_fc)) }}
+      - if:
+          - condition: template
+            value_template: "{{ wk >= 0 }}"
+        then:
+          - service: input_text.set_value
+            target:
+              entity_id: input_text.electric_week_history
+            data:
+              value: >
+                {{ ((whist.split(',') if whist else []) + [wlabel ~ ':' ~ (wk | round(0) | int)])[-8:] | join(',') }}
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.electric_week_start_usage
+        data:
+          value: "{{ used }}"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.electric_cycle_closed_pending

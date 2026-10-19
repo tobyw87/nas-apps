@@ -1,10 +1,10 @@
 {# Email layouts for the electric alerts. Presentation only: every number is passed in. #}
 
-{% macro bar(label, value, scale, color) -%}
+{% macro bar(label, value, scale, color, note='') -%}
 <tr>
 <td style="padding:4px 10px 4px 0;font-size:13px;color:#374151;white-space:nowrap">{{ label }}</td>
 <td style="padding:4px 0;width:100%"><div style="background:#e5e7eb;border-radius:4px"><div style="background:{{ color }};height:16px;border-radius:4px;width:{{ [[(value / ([scale, 1] | max) * 100) | round(0), 2] | max, 100] | min }}%">&nbsp;</div></div></td>
-<td style="padding:4px 0 4px 10px;font-size:13px;color:#111827;white-space:nowrap;text-align:right">{{ value | round(0) | int }} kWh</td>
+<td style="padding:4px 0 4px 10px;font-size:13px;color:#111827;white-space:nowrap;text-align:right">{{ value | round(0) | int }} kWh{% if note %} &middot; {{ note }}{% endif %}</td>
 </tr>
 {%- endmacro %}
 
@@ -33,16 +33,16 @@
 <tr><td style="padding:8px 20px 0 20px;color:#111827;font-size:14px;font-weight:bold">{{ heading }}</td></tr>
 {%- endmacro %}
 
-{% macro bottom(rate) -%}
+{% macro bottom(rate, fixed=17) -%}
 <tr><td style="padding:20px">
 <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px 14px;color:#6b7280;font-size:12px;line-height:1.5">
 <strong style="color:#374151">About these numbers</strong><br>
-Usage and cost come from your ComEd account through Home Assistant and usually run a day or more behind real use. "Forecast" is ComEd's own projection for the current bill cycle, not a guarantee. "Budget" is a kWh target estimated for your apartment for each month; it is not a ComEd figure, and a month's label means the bill cycle that ends in that month (cycles end around the 28th). Dollar amounts for extra usage assume about ${{ rate }} per kWh and leave out fixed monthly charges, so they are estimates. Your ComEd bill is the final word.
+Usage and cost come from your ComEd account through Home Assistant and usually run a day or more behind real use. "Forecast" is ComEd's own projection for the current bill cycle, not a guarantee. "Budget" is a kWh target estimated for your apartment for each month; it is not a ComEd figure, and a month's label means the bill cycle that ends in that month (cycles end around the 28th). Dollar amounts marked with a dollar sign next to kWh are usage charges only (about ${{ rate }} per kWh); "estimated bill" lines add about ${{ fixed | round(0) | int }} of fixed monthly charges. Either way they are estimates. Your ComEd bill is the final word.
 </div></td></tr>
 </table></div>
 {%- endmacro %}
 
-{% macro alert_html(used, proj, budget, rate, hist, month) -%}
+{% macro alert_html(used, proj, budget, rate, fixed, hist, month, comed_cost, comed_fc) -%}
 {% set over = proj - budget -%}
 {% set pct = (over / budget * 100) | round(0) | int -%}
 {% set scale = [used, proj, budget] | max -%}
@@ -61,17 +61,27 @@ Usage and cost come from your ComEd account through Home Assistant and usually r
 {% set tip = "Mild weather: if usage is high now, check for anything left running, such as a PTAC unit in an empty room." -%}
 {% endif -%}
 {{ top('#dc2626', 'Electric usage alert', headline, sub) }}
-{{ section('This cycle') }}
+{{ section('This cycle (usage charges)') }}
 <tr><td style="padding:6px 20px 12px 20px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
-{{ bar('Used so far', used, scale, '#2563eb') }}
-{{ bar('ComEd forecast', proj, scale, '#dc2626') }}
-{{ bar('Budget', budget, scale, '#6b7280') }}
+{{ bar('Used so far', used, scale, '#2563eb', '$' ~ ((used * rate) | round(0) | int)) }}
+{{ bar('ComEd forecast', proj, scale, '#dc2626', '$' ~ ((proj * rate) | round(0) | int)) }}
+{{ bar('Budget', budget, scale, '#6b7280', '$' ~ ((budget * rate) | round(0) | int)) }}
 </table></td></tr>
+{{ section('Estimated bill') }}
+<tr><td style="padding:6px 20px 12px 20px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;color:#374151">
+<tr><td style="padding:4px 0">If you finish at the forecast</td><td style="text-align:right"><strong>${{ (fixed + proj * rate) | round(0) | int }}</strong></td></tr>
+<tr><td style="padding:4px 0">If you finish at budget</td><td style="text-align:right">${{ (fixed + budget * rate) | round(0) | int }}</td></tr>
+<tr><td style="padding:4px 0">Difference</td><td style="text-align:right">${{ (over * rate) | round(0) | int }}</td></tr>
+{% if comed_cost > 0 %}<tr><td style="padding:4px 0">ComEd reports so far</td><td style="text-align:right">${{ '%.2f' | format(comed_cost) }}{% if comed_fc > 0 %} (forecast ${{ '%.2f' | format(comed_fc) }}){% endif %}</td></tr>{% endif %}
+</table>
+<div style="padding-top:6px;color:#6b7280;font-size:12px">Estimated bill = about ${{ fixed | round(0) | int }} in fixed charges plus ${{ rate }} per kWh.</div>
+</td></tr>
 {{ section('Compared with recent cycles') }}
 <tr><td style="padding:6px 20px 12px 20px">{{ history_chart(hist, 'Forecast', proj, '#dc2626') }}</td></tr>
 <tr><td style="padding:0 20px 4px 20px;color:#4b5563;font-size:13px;line-height:1.5"><strong>Tip:</strong> {{ tip }}</td></tr>
-{{ bottom(rate) }}
+{{ bottom(rate, fixed) }}
 {%- endmacro %}
 
 {% macro summary_html(total, cost, budget, days, hist, label, rate) -%}
@@ -106,4 +116,76 @@ Usage and cost come from your ComEd account through Home Assistant and usually r
 {% if prev > 0 %}<tr><td style="padding:4px 0">Change from previous cycle</td><td style="text-align:right">{{ ((total - prev) / prev * 100) | round(0) | int }}%</td></tr>{% endif %}
 </table></td></tr>
 {{ bottom(rate) }}
+{%- endmacro %}
+
+{% macro weekly_html(d) -%}
+{% set rate = d.rate -%}
+{% set over = d.proj - d.budget -%}
+{% set pct = (over / d.budget * 100) | abs | round(0) | int -%}
+{% set scale = [d.used, d.proj, d.budget] | max -%}
+{% if over > 0 -%}
+{% set accent = '#dc2626' -%}
+{% set verdict = 'on pace to finish ' ~ pct ~ '% over budget' -%}
+{% else -%}
+{% set accent = '#16a34a' -%}
+{% set verdict = 'on pace to finish ' ~ pct ~ '% under budget' -%}
+{% endif -%}
+{% if d.wk >= 0 -%}
+{% set headline = "This week: " ~ (d.wk | round(0) | int) ~ " kWh (about $" ~ ((d.wk * rate) | round(0) | int) ~ ")" -%}
+{% else -%}
+{% set headline = "Cycle so far: " ~ (d.used | round(0) | int) ~ " kWh (about $" ~ ((d.used * rate) | round(0) | int) ~ ")" -%}
+{% endif -%}
+{% set sub = "Across the whole bill cycle you have used " ~ (d.used | round(0) | int) ~ " kWh and are " ~ verdict ~ " (ComEd forecast " ~ (d.proj | round(0) | int) ~ " kWh vs a " ~ (d.budget | round(0) | int) ~ " kWh budget)." -%}
+{{ top(accent, 'Electric month-end recap' if d.final else 'Electric weekly summary', headline, sub) }}
+{% if d.final -%}
+<tr><td style="padding:0 20px 8px 20px;color:#4b5563;font-size:13px;line-height:1.5">This is the last weekly report before your bill cycle closes, so it doubles as the month-end recap. ComEd's final totals arrive after the cycle closes and will be in next Friday's report.</td></tr>
+{% endif -%}
+{% if d.closed -%}
+{% set cdiff = d.closed_total - d.closed_budget -%}
+{% set cpct = (cdiff / d.closed_budget * 100) | abs | round(0) | int -%}
+{% set cscale = [d.closed_total, d.closed_budget] | max -%}
+{% set ccolor = '#dc2626' if cdiff > 0 else '#16a34a' -%}
+{{ section('Bill cycle complete: ' ~ d.closed_label) }}
+<tr><td style="padding:6px 20px 4px 20px;color:#111827;font-size:14px">The cycle finished at <strong>{{ d.closed_total | round(0) | int }} kWh</strong>, {{ cpct }}% {{ 'over' if cdiff > 0 else 'under' }} budget, for about <strong>${{ '%.2f' | format(d.closed_cost) }}</strong> as reported by ComEd.</td></tr>
+<tr><td style="padding:6px 20px 12px 20px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+{{ bar('Used', d.closed_total, cscale, ccolor, '$' ~ ('%.0f' | format(d.closed_cost))) }}
+{{ bar('Budget', d.closed_budget, cscale, '#6b7280') }}
+</table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;color:#374151;margin-top:6px">
+{% if d.closed_total > 0 %}<tr><td style="padding:3px 0">Average cost per kWh (all-in)</td><td style="text-align:right">${{ (d.closed_cost / d.closed_total) | round(3) }}</td></tr>{% endif %}
+{% if d.closed_days > 0 %}<tr><td style="padding:3px 0">Cycle length</td><td style="text-align:right">{{ d.closed_days | int }} days</td></tr>
+<tr><td style="padding:3px 0">Average per day</td><td style="text-align:right">{{ (d.closed_total / d.closed_days) | round(1) }} kWh</td></tr>{% endif %}
+</table></td></tr>
+{% endif -%}
+{{ section('This cycle so far (usage charges)') }}
+<tr><td style="padding:6px 20px 12px 20px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+{{ bar('Used so far', d.used, scale, '#2563eb', '$' ~ ((d.used * rate) | round(0) | int)) }}
+{{ bar('ComEd forecast', d.proj, scale, accent, '$' ~ ((d.proj * rate) | round(0) | int)) }}
+{{ bar('Budget', d.budget, scale, '#6b7280', '$' ~ ((d.budget * rate) | round(0) | int)) }}
+</table></td></tr>
+{% if d.wk >= 0 and ':' in d.whist -%}
+{{ section('Week by week') }}
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.whist, d.wlabel, d.wk, accent) }}</td></tr>
+{% endif -%}
+{{ section('Recent bill cycles') }}
+{% if d.closed -%}
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.hist.split(',')[:-1] | join(','), d.closed_label, d.closed_total, ccolor) }}</td></tr>
+{% else -%}
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.hist, 'Forecast', d.proj, accent) }}</td></tr>
+{% endif -%}
+{{ section('The numbers') }}
+<tr><td style="padding:6px 20px 12px 20px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;color:#374151">
+{% if d.wk >= 0 %}<tr><td style="padding:4px 0">This week (since last report)</td><td style="text-align:right">{{ d.wk | round(0) | int }} kWh &middot; about ${{ (d.wk * rate) | round(0) | int }}</td></tr>
+{% else %}<tr><td style="padding:4px 0">This week</td><td style="text-align:right">first report, so weekly figures start next Friday</td></tr>{% endif %}
+<tr><td style="padding:4px 0">Cycle so far</td><td style="text-align:right">{{ d.used | round(0) | int }} kWh &middot; about ${{ (d.used * rate) | round(0) | int }}</td></tr>
+{% if d.comed_cost > 0 %}<tr><td style="padding:4px 0">ComEd reports so far</td><td style="text-align:right">${{ '%.2f' | format(d.comed_cost) }}{% if d.comed_fc > 0 %} (forecast ${{ '%.2f' | format(d.comed_fc) }}){% endif %}</td></tr>{% endif %}
+<tr><td style="padding:4px 0">Estimated bill at the forecast</td><td style="text-align:right"><strong>${{ (d.fixed + d.proj * rate) | round(0) | int }}</strong></td></tr>
+<tr><td style="padding:4px 0">Estimated bill at budget</td><td style="text-align:right">${{ (d.fixed + d.budget * rate) | round(0) | int }}</td></tr>
+</table>
+<div style="padding-top:6px;color:#6b7280;font-size:12px">Estimated bill = about ${{ d.fixed | round(0) | int }} in fixed charges plus ${{ rate }} per kWh. "This week" is the change in ComEd's running total since the previous Friday report, and ComEd data runs a day or more behind.</div>
+</td></tr>
+{{ bottom(rate, d.fixed) }}
 {%- endmacro %}
