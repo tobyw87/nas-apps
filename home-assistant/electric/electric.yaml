@@ -34,6 +34,32 @@ input_number:
     min: 0
     max: 10000
     step: 0.1
+  electric_temp_sum_cycle:
+    name: Electric temperature sum (cycle)
+    min: -1000000
+    max: 1000000
+    step: 0.1
+  electric_temp_n_cycle:
+    name: Electric temperature samples (cycle)
+    min: 0
+    max: 100000
+    step: 1
+  electric_temp_sum_week:
+    name: Electric temperature sum (week)
+    min: -1000000
+    max: 1000000
+    step: 0.1
+  electric_temp_n_week:
+    name: Electric temperature samples (week)
+    min: 0
+    max: 100000
+    step: 1
+  electric_closed_temp:
+    name: Electric closed cycle average temperature
+    min: -1000
+    max: 1000
+    step: 0.1
+    initial: -999
   electric_closed_total:
     name: Electric closed cycle usage
     min: 0
@@ -69,6 +95,17 @@ input_text:
   electric_alert_month:
     name: Electric alert last sent month
     max: 10
+  electric_weather_entity:
+    name: Electric weather entity for outdoor temperature
+    max: 100
+    initial: "weather.home"
+  electric_temp_history:
+    name: Electric cycle average temperature (label:degF, newest last)
+    max: 255
+    initial: "Aug:76.2,Sep:71.2"
+  electric_week_temp_history:
+    name: Electric weekly average temperature (label:degF, newest last)
+    max: 255
   electric_closed_label:
     name: Electric closed cycle label
     max: 10
@@ -187,6 +224,35 @@ automation:
                   start: "{{ states('input_datetime.electric_cycle_start') }}"
                   days: >
                     {% if start[:4] | int(0) > 2000 %}{{ (now().date() - strptime(start, '%Y-%m-%d').date()).days }}{% else %}0{% endif %}
+                  tsum: "{{ states('input_number.electric_temp_sum_cycle') | float(0) }}"
+                  tn: "{{ states('input_number.electric_temp_n_cycle') | float(0) }}"
+                  tmean: "{{ (tsum / tn) | round(1) if tn >= 3 else -999 }}"
+                  thist: "{{ states('input_text.electric_temp_history') }}"
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_closed_temp
+                data:
+                  value: "{{ tmean }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ tmean > -900 }}"
+                then:
+                  - service: input_text.set_value
+                    target:
+                      entity_id: input_text.electric_temp_history
+                    data:
+                      value: >
+                        {{ ((thist.split(',') if thist else []) + [label ~ ':' ~ tmean])[-6:] | join(',') }}
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_temp_sum_cycle
+                data:
+                  value: 0
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.electric_temp_n_cycle
+                data:
+                  value: 0
               - service: input_number.set_value
                 target:
                   entity_id: input_number.electric_closed_total
@@ -259,6 +325,39 @@ automation:
                 data:
                   value: "{{ new }}"
 
+  - id: electric_temp_sampler
+    alias: Electric outdoor temperature sampler
+    mode: queued
+    trigger:
+      - platform: time_pattern
+        minutes: 0
+    variables:
+      t: "{{ state_attr(states('input_text.electric_weather_entity'), 'temperature') | float(-999) }}"
+    condition:
+      - condition: template
+        value_template: "{{ t > -900 }}"
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.electric_temp_sum_cycle
+        data:
+          value: "{{ states('input_number.electric_temp_sum_cycle') | float(0) + t }}"
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.electric_temp_n_cycle
+        data:
+          value: "{{ states('input_number.electric_temp_n_cycle') | float(0) + 1 }}"
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.electric_temp_sum_week
+        data:
+          value: "{{ states('input_number.electric_temp_sum_week') | float(0) + t }}"
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.electric_temp_n_week
+        data:
+          value: "{{ states('input_number.electric_temp_n_week') | float(0) + 1 }}"
+
   - id: electric_weekly_summary
     alias: Electric weekly summary (Friday 4 PM)
     mode: single
@@ -288,6 +387,12 @@ automation:
           final: "{{ 22 <= now().day <= 28 }}"
           wlabel: "{{ now().strftime('%-m/%-d') }}"
           cur_label: "{{ (now() if now().day < 29 else now() + timedelta(days=5)).strftime('%b') }}"
+          temps: "{{ states('input_text.electric_temp_history') }}"
+          wtemps: "{{ states('input_text.electric_week_temp_history') }}"
+          cycle_temp: "{{ (states('input_number.electric_temp_sum_cycle') | float(0) / states('input_number.electric_temp_n_cycle') | float(1)) | round(1) if states('input_number.electric_temp_n_cycle') | float(0) >= 3 else -999 }}"
+          week_temp: "{{ (states('input_number.electric_temp_sum_week') | float(0) / states('input_number.electric_temp_n_week') | float(1)) | round(1) if states('input_number.electric_temp_n_week') | float(0) >= 3 else -999 }}"
+          prev_week_temp: "{{ (wtemps.split(',')[-1].split(':')[1] | float(-999)) if ':' in wtemps else -999 }}"
+          closed_temp: "{{ states('input_number.electric_closed_temp') | float(-999) }}"
           comed_cost: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_cost_to_date') | float(0) }}"
           comed_fc: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_forecasted_cost') | float(0) }}"
           wk: >
@@ -300,10 +405,11 @@ automation:
             Cycle so far: {{ used | round(0) | int }} kWh (about ${{ (used * rate) | round(0) | int }})
             ComEd forecast: {{ proj | round(0) | int }} kWh vs budget {{ budget | round(0) | int }} kWh
             Estimated bill at the forecast: ${{ (fixed + proj * rate) | round(0) | int }}
+            {% if week_temp > -900 %}Average outdoor temperature this week: {{ week_temp }}F{% if cycle_temp > -900 %}, this cycle: {{ cycle_temp }}F{% endif %}{% endif %}
             {% if closed %}Bill cycle complete ({{ closed_label }}): {{ closed_total | round(0) | int }} kWh, ${{ '%.2f' | format(closed_cost) }}{% endif %}
           data:
             html: >-
-              {% from 'electric.jinja' import weekly_html %}{{ weekly_html(dict(used=used, proj=proj, budget=budget, rate=rate, fixed=fixed, hist=hist, whist=whist, wk=wk, wlabel=wlabel, cur_label=cur_label, closed=closed, closed_label=closed_label, closed_total=closed_total, closed_cost=closed_cost, closed_budget=closed_budget, closed_days=closed_days, final=final, comed_cost=comed_cost, comed_fc=comed_fc)) }}
+              {% from 'electric.jinja' import weekly_html %}{{ weekly_html(dict(used=used, proj=proj, budget=budget, rate=rate, fixed=fixed, hist=hist, whist=whist, wk=wk, wlabel=wlabel, cur_label=cur_label, temps=temps, wtemps=wtemps, cycle_temp=cycle_temp, week_temp=week_temp, prev_week_temp=prev_week_temp, closed_temp=closed_temp, closed=closed, closed_label=closed_label, closed_total=closed_total, closed_cost=closed_cost, closed_budget=closed_budget, closed_days=closed_days, final=final, comed_cost=comed_cost, comed_fc=comed_fc)) }}
       - if:
           - condition: template
             value_template: "{{ wk >= 0 }}"
@@ -314,6 +420,26 @@ automation:
             data:
               value: >
                 {% set ns = namespace(items=[]) %}{% for i in whist.split(',') if i and not i.startswith(wlabel ~ ':') %}{% set ns.items = ns.items + [i] %}{% endfor %}{{ (ns.items + [wlabel ~ ':' ~ (wk | round(0) | int)])[-8:] | join(',') }}
+      - if:
+          - condition: template
+            value_template: "{{ week_temp > -900 }}"
+        then:
+          - service: input_text.set_value
+            target:
+              entity_id: input_text.electric_week_temp_history
+            data:
+              value: >
+                {% set ns = namespace(items=[]) %}{% for i in wtemps.split(',') if i and not i.startswith(wlabel ~ ':') %}{% set ns.items = ns.items + [i] %}{% endfor %}{{ (ns.items + [wlabel ~ ':' ~ week_temp])[-8:] | join(',') }}
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.electric_temp_sum_week
+        data:
+          value: 0
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.electric_temp_n_week
+        data:
+          value: 0
       - service: input_number.set_value
         target:
           entity_id: input_number.electric_week_start_usage

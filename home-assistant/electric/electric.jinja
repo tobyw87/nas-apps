@@ -4,20 +4,24 @@
 <tr>
 <td style="padding:4px 10px 4px 0;font-size:13px;color:#374151;white-space:nowrap">{{ label }}</td>
 <td style="padding:4px 0;width:100%"><div style="background:#e5e7eb;border-radius:4px"><div style="background:{{ color }};height:16px;border-radius:4px;width:{{ [[(value / ([scale, 1] | max) * 100) | round(0), 2] | max, 100] | min }}%">&nbsp;</div></div></td>
-<td style="padding:4px 0 4px 10px;font-size:13px;color:#111827;white-space:nowrap;text-align:right">{{ value | round(0) | int }} kWh{% if note %} &middot; {{ note }}{% endif %}</td>
+<td style="padding:4px 0 4px 10px;font-size:13px;color:#111827;white-space:nowrap;text-align:right">{{ value | round(0) | int }} kWh{% if note | trim %} &middot; {{ note | trim }}{% endif %}</td>
 </tr>
 {%- endmacro %}
 
-{% macro history_chart(hist, label, value, color, caption='') -%}
+{% macro temp_note(temps, label) -%}
+{% for t in temps.split(',') if t.startswith(label ~ ':') %}{{ t.split(':')[1] | float(0) | round(0) | int }}&deg;F avg{% endfor %}
+{%- endmacro %}
+
+{% macro history_chart(hist, label, value, color, caption='', temps='', last_note='') -%}
 {% set ns = namespace(top=value) -%}
 {% for item in hist.split(',') if ':' in item -%}
 {% if item.split(':')[1] | float(0) > ns.top %}{% set ns.top = item.split(':')[1] | float(0) %}{% endif -%}
 {% endfor -%}
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
 {% for item in hist.split(',') if ':' in item -%}
-{{ bar(item.split(':')[0], item.split(':')[1] | float(0), ns.top, '#94a3b8') }}
+{{ bar(item.split(':')[0], item.split(':')[1] | float(0), ns.top, '#94a3b8', temp_note(temps, item.split(':')[0])) }}
 {% endfor -%}
-{{ bar(label, value, ns.top, color) }}
+{{ bar(label, value, ns.top, color, last_note) }}
 </table>
 {% if caption %}<div style="padding-top:6px;color:#6b7280;font-size:12px">{{ caption }}</div>{% endif %}
 {%- endmacro %}
@@ -34,11 +38,11 @@
 <tr><td style="padding:8px 20px 0 20px;color:#111827;font-size:14px;font-weight:bold">{{ heading }}</td></tr>
 {%- endmacro %}
 
-{% macro bottom(rate, fixed=17) -%}
+{% macro bottom(rate, fixed=17, temps=false) -%}
 <tr><td style="padding:20px">
 <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px 14px;color:#6b7280;font-size:12px;line-height:1.5">
 <strong style="color:#374151">About these numbers</strong><br>
-Usage and cost come from your ComEd account through Home Assistant and usually run a day or more behind real use. "Forecast" is ComEd's own projection for the current bill cycle, not a guarantee. "Budget" is a kWh target estimated for your apartment for each month; it is not a ComEd figure, and a month's label means the bill cycle that ends in that month (cycles end around the 28th). Dollar amounts marked with a dollar sign next to kWh are usage charges only (about ${{ rate }} per kWh); "estimated bill" lines add about ${{ fixed | round(0) | int }} of fixed monthly charges. Either way they are estimates. Your ComEd bill is the final word.
+Usage and cost come from your ComEd account through Home Assistant and usually run a day or more behind real use. "Forecast" is ComEd's own projection for the current bill cycle, not a guarantee. "Budget" is a kWh target estimated for your apartment for each month; it is not a ComEd figure, and a month's label means the bill cycle that ends in that month (cycles end around the 28th). Dollar amounts marked with a dollar sign next to kWh are usage charges only (about ${{ rate }} per kWh); "estimated bill" lines add about ${{ fixed | round(0) | int }} of fixed monthly charges. Either way they are estimates.{% if temps %} Average temperatures are the mean of hourly outdoor readings from Home Assistant's weather source, so they can differ from the temperatures printed on your bill, and a period's average may cover only part of it when readings have just started.{% endif %} Your ComEd bill is the final word.
 </div></td></tr>
 </table></div>
 {%- endmacro %}
@@ -138,6 +142,8 @@ Usage and cost come from your ComEd account through Home Assistant and usually r
 {% endif -%}
 {% set sub = "Across the whole bill cycle you have used " ~ (d.used | round(0) | int) ~ " kWh and are " ~ verdict ~ " (ComEd forecast " ~ (d.proj | round(0) | int) ~ " kWh vs a " ~ (d.budget | round(0) | int) ~ " kWh budget)." -%}
 {{ top(accent, 'Electric month-end recap' if d.final else 'Electric weekly summary', headline, sub) }}
+{% set cnote = ((d.cycle_temp | round(0) | int) ~ '&deg;F avg so far') if d.cycle_temp > -900 else '' -%}
+{% set wnote = ((d.week_temp | round(0) | int) ~ '&deg;F avg') if d.week_temp > -900 else '' -%}
 {% if d.final -%}
 <tr><td style="padding:0 20px 8px 20px;color:#4b5563;font-size:13px;line-height:1.5">This is the last weekly report before your bill cycle closes, so it doubles as the month-end recap. ComEd's final totals arrive after the cycle closes and will be in next Friday's report.</td></tr>
 {% endif -%}
@@ -155,6 +161,7 @@ Usage and cost come from your ComEd account through Home Assistant and usually r
 </table>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;color:#374151;margin-top:6px">
 {% if d.closed_total > 0 %}<tr><td style="padding:3px 0">Average cost per kWh (all-in)</td><td style="text-align:right">${{ (d.closed_cost / d.closed_total) | round(3) }}</td></tr>{% endif %}
+{% if d.closed_temp > -900 %}<tr><td style="padding:3px 0">Average outdoor temperature</td><td style="text-align:right">{{ d.closed_temp | round(1) }}&deg;F</td></tr>{% endif %}
 {% if d.closed_days > 0 %}<tr><td style="padding:3px 0">Cycle length</td><td style="text-align:right">{{ d.closed_days | int }} days</td></tr>
 <tr><td style="padding:3px 0">Average per day</td><td style="text-align:right">{{ (d.closed_total / d.closed_days) | round(1) }} kWh</td></tr>{% endif %}
 </table></td></tr>
@@ -172,19 +179,21 @@ Usage and cost come from your ComEd account through Home Assistant and usually r
 {% endfor -%}
 {% if d.wk >= 0 and wns.items | length > 0 -%}
 {{ section('Week by week') }}
-<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(wns.items | join(','), d.wlabel, d.wk, accent, 'Each bar is the kWh ComEd recorded between one Friday report and the next, dated by the report. The last bar is this week.') }}</td></tr>
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(wns.items | join(','), d.wlabel, d.wk, accent, 'Each bar is the kWh ComEd recorded between one Friday report and the next, dated by the report. The last bar is this week. Temperatures are the outdoor average for each week.', d.wtemps, wnote) }}</td></tr>
 {% endif -%}
 {{ section('Recent bill cycles') }}
 {% if d.closed -%}
-<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.hist.split(',')[:-1] | join(','), d.closed_label, d.closed_total, ccolor, 'All bars are final totals from your bills.') }}</td></tr>
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.hist.split(',')[:-1] | join(','), d.closed_label, d.closed_total, ccolor, 'All bars are final totals from your bills. Temperatures are the outdoor average for each cycle.', d.temps, ((d.closed_temp | round(0) | int) ~ '&deg;F avg') if d.closed_temp > -900 else '') }}</td></tr>
 {% else -%}
-<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.hist, d.cur_label ~ ' (forecast)', d.proj, accent, "Past cycles are final totals from your bills. The last bar is ComEd's projection for the cycle still in progress.") }}</td></tr>
+<tr><td style="padding:6px 20px 12px 20px">{{ history_chart(d.hist, d.cur_label ~ ' (forecast)', d.proj, accent, "Past cycles are final totals from your bills. The last bar is ComEd's projection for the cycle still in progress. Temperatures are the outdoor average for each cycle.", d.temps, cnote) }}</td></tr>
 {% endif -%}
 {{ section('The numbers') }}
 <tr><td style="padding:6px 20px 12px 20px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;color:#374151">
 {% if d.wk >= 0 %}<tr><td style="padding:4px 0">This week (since last report)</td><td style="text-align:right">{{ d.wk | round(0) | int }} kWh &middot; about ${{ (d.wk * rate) | round(0) | int }}</td></tr>
 {% else %}<tr><td style="padding:4px 0">This week</td><td style="text-align:right">first report, so weekly figures start next Friday</td></tr>{% endif %}
+{% if d.week_temp > -900 %}<tr><td style="padding:4px 0">Average outdoor temperature this week</td><td style="text-align:right">{{ d.week_temp | round(1) }}&deg;F{% if d.prev_week_temp > -900 %} (last week {{ d.prev_week_temp | round(1) }}&deg;F){% endif %}</td></tr>{% endif %}
+{% if d.cycle_temp > -900 %}<tr><td style="padding:4px 0">Average outdoor temperature this cycle</td><td style="text-align:right">{{ d.cycle_temp | round(1) }}&deg;F so far</td></tr>{% endif %}
 <tr><td style="padding:4px 0">Cycle so far</td><td style="text-align:right">{{ d.used | round(0) | int }} kWh &middot; about ${{ (d.used * rate) | round(0) | int }}</td></tr>
 {% if d.comed_cost > 0 %}<tr><td style="padding:4px 0">ComEd reports so far</td><td style="text-align:right">${{ '%.2f' | format(d.comed_cost) }}{% if d.comed_fc > 0 %} (forecast ${{ '%.2f' | format(d.comed_fc) }}){% endif %}</td></tr>{% endif %}
 <tr><td style="padding:4px 0">Estimated bill at the forecast</td><td style="text-align:right"><strong>${{ (d.fixed + d.proj * rate) | round(0) | int }}</strong></td></tr>
@@ -192,5 +201,5 @@ Usage and cost come from your ComEd account through Home Assistant and usually r
 </table>
 <div style="padding-top:6px;color:#6b7280;font-size:12px">Estimated bill = about ${{ d.fixed | round(0) | int }} in fixed charges plus ${{ rate }} per kWh. "This week" is the change in ComEd's running total since the previous Friday report, and ComEd data runs a day or more behind.</div>
 </td></tr>
-{{ bottom(rate, d.fixed) }}
+{{ bottom(rate, d.fixed, true) }}
 {%- endmacro %}
