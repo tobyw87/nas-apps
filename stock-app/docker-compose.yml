@@ -1,0 +1,22 @@
+# Reference setup. The NAS runs it from /volume1/homes/tobyw87 with ./stockapp mounted as /app
+# (data/ lives in that folder and is not in this repo).
+version: '3.8'
+
+services:
+  stock-radar:
+    build: .
+    container_name: stock-sentiment-app
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./stockapp:/app
+
+  daily-scan:
+    build: .
+    container_name: stock-daily-scan
+    restart: unless-stopped
+    entrypoint: ["python3", "/app/daily_scheduler.py"]
+    volumes:
+      - ./stockapp:/app
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro

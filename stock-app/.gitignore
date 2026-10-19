@@ -1,0 +1,9 @@
+# keep personal data and secrets out of the repo
+data/
+*.bak*
+.env
+*.db
+*.pkl
+__pycache__/
+watchlists.json
+rank_history.json
