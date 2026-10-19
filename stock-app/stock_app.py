@@ -3716,6 +3716,40 @@ SNAPSHOT_FILE = os.path.join(DATA_DIR, "market_snapshot.pkl") if DATA_DIR else N
 SNAPSHOT_MAX_AGE_HOURS = 96.0         # covers weekends and holidays; older than this, pages scan live
 SNAPSHOT_DAILY_JOB_MAX_AGE_HOURS = 2.0  # the 3:30 PM Track Record scan only reuses a snapshot this fresh
 REFRESH_JOB = bool(st.session_state.get("_refresh_job"))   # set by market_refresh.py (headless background scan)
+# Yahoo cuts a client off after roughly 650 stocks an hour (about 3 requests per stock). The background job runs every
+# 30 minutes, so each run re-scans at most this many stocks: ones with no data yet first, then the stalest. A big
+# Market Coverage fills in over a few runs and stays fresh on a rolling basis. 0 = scan everything every run.
+REFRESH_MAX_STOCKS = int(os.environ.get("REFRESH_MAX_STOCKS", "300"))
+
+
+def refresh_batch(tickers, previous_df, budget):
+    """The tickers this background run scans (in list order): stocks with no data yet, then the oldest readings."""
+    tickers = list(tickers)
+    if budget <= 0 or len(tickers) <= budget:
+        return tickers
+    ages = {}
+    if previous_df is not None and not previous_df.empty and "Ticker" in previous_df.columns:
+        stamp = previous_df["Scan TS"] if "Scan TS" in previous_df.columns else pd.Series(0.0, index=previous_df.index)
+        ages = dict(zip(previous_df["Ticker"], pd.to_numeric(stamp, errors="coerce").fillna(0.0)))
+    order = sorted(range(len(tickers)), key=lambda i: (ages.get(tickers[i], -1.0), i))
+    return [tickers[i] for i in sorted(order[:budget])]
+
+
+def merge_snapshot_rows(previous_df, new_df, tickers):
+    """This run's fresh rows plus the previous snapshot's rows for every other stock, in list order."""
+    frames = []
+    fresh = set()
+    if new_df is not None and not new_df.empty:
+        frames.append(new_df)
+        fresh = set(new_df["Ticker"])
+    if previous_df is not None and not previous_df.empty:
+        frames.append(previous_df[~previous_df["Ticker"].isin(fresh)])
+    if not frames:
+        return pd.DataFrame()
+    merged = pd.concat(frames, ignore_index=True)
+    merged = merged[merged["Ticker"].isin(set(tickers))]
+    position = {t: i for i, t in enumerate(tickers)}
+    return merged.sort_values("Ticker", key=lambda col: col.map(position)).reset_index(drop=True)
 
 
 def save_market_snapshot(df, requested, coverage):
@@ -3879,18 +3913,24 @@ def show_coverage_report(df):
 if REFRESH_JOB:
     _job_started = time.time()
     _job_tickers = snapshot_job_tickers()
-    _job_df = run_universe_scan(tuple(_job_tickers), "Current")
-    _job_result = {"requested": len(_job_tickers), "loaded": int(len(_job_df)), "saved": False,
-                   "social": _job_df["Social Source"].fillna("live").value_counts().to_dict()
-                   if "Social Source" in _job_df.columns else {}}
-    # A scan that mostly failed (Yahoo down / rate-limited) doesn't replace a good snapshot
     _previous = load_market_snapshot()
-    _enough = len(_job_df) >= 0.6 * len(_job_tickers) or not _previous or len(_job_df) >= 0.9 * len(_previous["df"])
-    if not _job_df.empty and _enough:
+    _prev_df = _previous["df"] if _previous else None
+    _batch = refresh_batch(_job_tickers, _prev_df, REFRESH_MAX_STOCKS)
+    _new_df = run_universe_scan(tuple(_batch), "Current")
+    if not _new_df.empty:
+        _new_df["Scan TS"] = time.time()
+    _job_df = merge_snapshot_rows(_prev_df, _new_df, _job_tickers)
+    _job_result = {"requested": len(_job_tickers), "loaded": int(len(_job_df)), "scanned": len(_batch),
+                   "fresh": int(len(_new_df)), "saved": False,
+                   "social": _new_df["Social Source"].fillna("live").value_counts().to_dict()
+                   if "Social Source" in _new_df.columns else {}}
+    # A run that mostly failed (Yahoo down / rate-limited) doesn't replace a good snapshot
+    _enough = len(_new_df) >= 0.6 * len(_batch) or not _previous
+    if not _new_df.empty and _enough:
         _job_result["saved"] = save_market_snapshot(_job_df, _job_tickers, coverage_key)
-        _job_df = _ensure_leverage_columns(_job_df)
-        record_score_observations(_job_df)
-        record_scan_metric_snapshots(_job_df)
+        _new_df = _ensure_leverage_columns(_new_df)
+        record_score_observations(_new_df)          # only this run's fresh readings go into the score history
+        record_scan_metric_snapshots(_new_df)
     _job_result["seconds"] = round(time.time() - _job_started, 1)
     st.session_state["_refresh_result"] = _job_result
     st.stop()

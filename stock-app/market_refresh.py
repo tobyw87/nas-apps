@@ -62,7 +62,8 @@ def main():
             raise RuntimeError("; ".join(str(e.value)[:400] for e in at.exception))
         res = at.session_state["_refresh_result"] if "_refresh_result" in at.session_state else {}
         soc = res.get("social") or {}
-        summary = (f"{res.get('loaded', 0)} of {res.get('requested', 0)} stocks in {res.get('seconds', 0):.0f}s "
+        summary = (f"{res.get('loaded', 0)} of {res.get('requested', 0)} stocks in the snapshot "
+                   f"({res.get('fresh', 0)} of {res.get('scanned', 0)} scanned this run, {res.get('seconds', 0):.0f}s) "
                    f"(StockTwits: {soc.get('live', 0)} fresh, {soc.get('saved', 0)} saved, {soc.get('none', 0)} pending)")
         if res.get("saved"):
             status.update(ok=True, message="Snapshot saved: " + summary)
