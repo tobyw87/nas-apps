@@ -390,6 +390,18 @@ INST_MIN_ANALYSTS = 15          # Large-Cap / Institutional: broad Wall Street c
 INST_MIN_MARKET_CAP = 10e9      # ...and a large-cap market value ($10B+)
 EMERGING_MIN_ANALYSTS = 2       # Emerging Growth: just enough coverage to have a consensus
 
+# Mid-Cap and Small-Cap tabs (same size cutoffs as the Deep Dive market-cap labels). They score exactly like the
+# existing tabs: Mid-Cap like Large-Cap / Institutional (45% analysts, 35% upside, 20% social) and Small-Cap like
+# Emerging Growth (30/30/40), so the history behind the Smoothed view carries over. Edit the numbers here.
+MID_MIN_MARKET_CAP = 2e9        # Mid-Cap: $2B up to the Large-Cap cutoff
+MID_MAX_MARKET_CAP = INST_MIN_MARKET_CAP
+MID_MIN_ANALYSTS = 8            # fewer than Large-Cap: mid caps have thinner Wall Street coverage
+MID_REQUIRE_PROFIT = True       # positive forward P/E, like Large-Cap
+SMALL_MIN_MARKET_CAP = 300e6    # Small-Cap: $300M up to $2B
+SMALL_MAX_MARKET_CAP = MID_MIN_MARKET_CAP
+SMALL_MIN_ANALYSTS = 3          # small caps are thinly covered, so a consensus of 3 is enough
+SMALL_REQUIRE_PROFIT = False    # unprofitable small caps are allowed (Composite+ still takes points off for it)
+
 # Extra candidates per sector (beyond SECTOR_UNIVERSES). Every scanned stock is still checked
 # against Yahoo's own sector label, so a misfiled ticker is simply skipped.
 SECTOR_EXTRA_CANDIDATES = {
@@ -2177,6 +2189,10 @@ TRACK_LISTS = {
     "emer_smooth": "🚀 Emerging Growth (Classic)",
     "inst_plus_smooth": "💎 Large-Cap / Institutional (Composite+)",
     "emer_plus_smooth": "💎 Emerging Growth (Composite+)",
+    "mid_smooth": "🏢 Mid-Cap (Classic)",
+    "small_smooth": "🔬 Small-Cap (Classic)",
+    "mid_plus_smooth": "💎 Mid-Cap (Composite+)",
+    "small_plus_smooth": "💎 Small-Cap (Composite+)",
 }
 
 try:
@@ -4665,6 +4681,19 @@ elif app_mode == "🏆 Recommended Stocks":
         ]
         emerging_pool = df_rec_all[df_rec_all["Analysts"] >= EMERGING_MIN_ANALYSTS]
 
+        def size_pool(min_cap, max_cap, min_analysts, require_profit):
+            pool = df_rec_all[
+                (df_rec_all["Analysts"] >= min_analysts)
+                & (df_rec_all["Market Cap Num"] >= min_cap)
+                & (df_rec_all["Market Cap Num"] < max_cap)
+            ]
+            if require_profit:
+                pool = pool[pd.to_numeric(pool["Forward PE"], errors="coerce") > 0]
+            return pool
+
+        mid_pool = size_pool(MID_MIN_MARKET_CAP, MID_MAX_MARKET_CAP, MID_MIN_ANALYSTS, MID_REQUIRE_PROFIT)
+        small_pool = size_pool(SMALL_MIN_MARKET_CAP, SMALL_MAX_MARKET_CAP, SMALL_MIN_ANALYSTS, SMALL_REQUIRE_PROFIT)
+
         def rank_pool(pool, live_col, score_key, classic_col):
             scored = apply_smoothing(pool, live_col, score_key, score_hist, now_ts)
             scored["Classic Composite"] = scored[classic_col]
@@ -4679,12 +4708,19 @@ elif app_mode == "🏆 Recommended Stocks":
         emer_live, emer_smooth = rank_pool(emerging_pool, "Composite Emerging", "emerging", "Composite Emerging")
         inst_plus_live, inst_plus_smooth = rank_pool(inst_pool, "Composite+ Core", "core_plus", "Composite Core")
         emer_plus_live, emer_plus_smooth = rank_pool(emerging_pool, "Composite+ Emerging", "emerging_plus", "Composite Emerging")
+        # Mid-Cap scores like Large-Cap / Institutional, Small-Cap like Emerging Growth (see the constants at the top)
+        mid_live, mid_smooth = rank_pool(mid_pool, "Composite Core", "core", "Composite Core")
+        small_live, small_smooth = rank_pool(small_pool, "Composite Emerging", "emerging", "Composite Emerging")
+        mid_plus_live, mid_plus_smooth = rank_pool(mid_pool, "Composite+ Core", "core_plus", "Composite Core")
+        small_plus_live, small_plus_smooth = rank_pool(small_pool, "Composite+ Emerging", "emerging_plus", "Composite Emerging")
 
         # Track record: today's picks are saved once per market day, only from All Sectors at the pinned level,
         # so every day in the record is drawn from the same pool of stocks. Both models are tracked.
         if selected_sector == "All Sectors" and coverage_key == TRACK_COVERAGE:
             save_daily_snapshot({"inst_smooth": inst_smooth, "emer_smooth": emer_smooth,
-                                 "inst_plus_smooth": inst_plus_smooth, "emer_plus_smooth": emer_plus_smooth}, now_ts,
+                                 "inst_plus_smooth": inst_plus_smooth, "emer_plus_smooth": emer_plus_smooth,
+                                 "mid_smooth": mid_smooth, "small_smooth": small_smooth,
+                                 "mid_plus_smooth": mid_plus_smooth, "small_plus_smooth": small_plus_smooth}, now_ts,
                                 dict(zip(df_rec_all["Ticker"], df_rec_all["Company"])),
                                 coverage=coverage_key, source="daily scan" if DAILY_JOB else "page view")
 
@@ -4780,12 +4816,18 @@ elif app_mode == "🏆 Recommended Stocks":
         if is_plus:
             inst_df = inst_plus_smooth if is_smoothed else inst_plus_live
             emerging_df = emer_plus_smooth if is_smoothed else emer_plus_live
+            mid_df = mid_plus_smooth if is_smoothed else mid_plus_live
+            small_df = small_plus_smooth if is_smoothed else small_plus_live
         else:
             inst_df = inst_smooth if is_smoothed else inst_live
             emerging_df = emer_smooth if is_smoothed else emer_live
+            mid_df = mid_smooth if is_smoothed else mid_live
+            small_df = small_smooth if is_smoothed else small_live
 
-        tab_inst, tab_emerging = st.tabs([
+        tab_inst, tab_mid, tab_small, tab_emerging = st.tabs([
             f"🏛️ Large-Cap / Institutional ({len(inst_pool)})",
+            f"🏢 Mid-Cap ({len(mid_pool)})",
+            f"🔬 Small-Cap ({len(small_pool)})",
             f"🚀 Emerging Growth ({len(emerging_pool)})",
         ])
         with tab_inst:
@@ -4800,6 +4842,33 @@ elif app_mode == "🏆 Recommended Stocks":
                 f"No scanned stocks have {INST_MIN_ANALYSTS}+ analysts, a ${INST_MIN_MARKET_CAP / 1e9:.0f}B+ market cap "
                 "and a positive forward P/E. "
                 "Try increasing 'Rows to Scan & Display' in the sidebar.",
+            )
+        with tab_mid:
+            st.caption(
+                f"**Mid-cap conviction:** stocks with a market cap of **${MID_MIN_MARKET_CAP / 1e9:.0f}B to "
+                f"${MID_MAX_MARKET_CAP / 1e9:.0f}B** and **≥ {MID_MIN_ANALYSTS} analysts**"
+                + (", **profitable companies only** (positive forward P/E)" if MID_REQUIRE_PROFIT else "")
+                + ". Same weighting as Large-Cap: **45% Analyst Buy % + 35% Valuation Runway + 20% Social Sentiment**."
+            )
+            render_rec_tab(
+                mid_df, "df_rec_mid", "Mid-Cap",
+                f"No scanned stocks are ${MID_MIN_MARKET_CAP / 1e9:.0f}B-${MID_MAX_MARKET_CAP / 1e9:.0f}B with "
+                f"{MID_MIN_ANALYSTS}+ analysts. Mid caps are mostly in the S&P MidCap 400: pick a larger "
+                "'Market Coverage' in the sidebar.",
+            )
+        with tab_small:
+            st.caption(
+                f"**Small-cap momentum:** stocks with a market cap of **${SMALL_MIN_MARKET_CAP / 1e6:.0f}M to "
+                f"${SMALL_MAX_MARKET_CAP / 1e9:.0f}B** and **≥ {SMALL_MIN_ANALYSTS} analysts**"
+                + (", **profitable companies only**" if SMALL_REQUIRE_PROFIT else " (unprofitable companies allowed)")
+                + ". Same weighting as Emerging Growth: **30% Analyst Buy % + 30% Valuation Runway + 40% "
+                "Volume-Weighted Social Momentum**, with thin coverage pulled toward a 65% market prior."
+            )
+            render_rec_tab(
+                small_df, "df_rec_small", "Small-Cap",
+                f"No scanned stocks are ${SMALL_MIN_MARKET_CAP / 1e6:.0f}M-${SMALL_MAX_MARKET_CAP / 1e9:.0f}B with "
+                f"{SMALL_MIN_ANALYSTS}+ analysts. Small caps are mostly in the S&P SmallCap 600: pick the largest "
+                "'Market Coverage' in the sidebar.",
             )
         with tab_emerging:
             st.caption(
@@ -4816,6 +4885,8 @@ elif app_mode == "🏆 Recommended Stocks":
         stamp = f"{'composite_plus_' if is_plus else ''}{'smoothed' if is_smoothed else 'live'}_{now.strftime('%Y%m%d_%H%M')}"
         with table_csv_slot.container():
             for label, tdf, fname in (("Institutional", inst_df, "recommended_large_cap_institutional"),
+                                      ("Mid-Cap", mid_df, "recommended_mid_cap"),
+                                      ("Small-Cap", small_df, "recommended_small_cap"),
                                       ("Emerging", emerging_df, "recommended_emerging_growth")):
                 if not tdf.empty:
                     csv_cols = [c for c in display_cols if c != "View"]
@@ -5604,7 +5675,9 @@ elif app_mode == "📈 Track Record":
                      height=min(760, 40 + 35 * max(len(detail), 1)))
 
         list_tag = {"inst_smooth": "institutional", "emer_smooth": "emerging", "inst_plus_smooth": "institutional_composite_plus",
-                    "emer_plus_smooth": "emerging_composite_plus"}.get(list_key, list_key)
+                    "emer_plus_smooth": "emerging_composite_plus", "mid_smooth": "mid_cap",
+                    "small_smooth": "small_cap", "mid_plus_smooth": "mid_cap_composite_plus",
+                    "small_plus_smooth": "small_cap_composite_plus"}.get(list_key, list_key)
         with table_csv_slot.container():
             st.download_button(
                 label=f"📥 Download Track Record CSV ({len(tr)} picks)",
