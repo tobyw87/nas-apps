@@ -15,4 +15,5 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./utility.html:/usr/share/nginx/html/utility.html:ro
       - ./default.conf.template:/etc/nginx/templates/default.conf.template:ro

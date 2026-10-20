@@ -141,6 +141,33 @@ template:
         unique_id: electric_rate_per_kwh
         unit_of_measurement: "USD/kWh"
         state: "{{ states('input_number.electric_rate') | float(0.163) }}"
+      - name: "Electric Dashboard"
+        unique_id: electric_dashboard
+        state: "ok"
+        attributes:
+          used: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_usage_to_date') | float(0) }}"
+          forecast: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_forecasted_usage') | float(0) }}"
+          budget: "{{ states('sensor.electric_monthly_budget') | float(0) }}"
+          rate: "{{ states('input_number.electric_rate') | float(0.163) }}"
+          fixed: "{{ states('input_number.electric_fixed_charge') | float(17.1) }}"
+          comed_cost: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_cost_to_date') | float(0) }}"
+          comed_fc: "{{ states('sensor.elec_account_07249118370720160943_current_bill_electric_forecasted_cost') | float(0) }}"
+          month_label: "{{ (now() if now().day < 29 else now() + timedelta(days=5)).strftime('%b') }}"
+          hist: "{{ states('input_text.electric_history') }}"
+          temps: "{{ states('input_text.electric_temp_history') }}"
+          whist: "{{ states('input_text.electric_week_history') }}"
+          wtemps: "{{ states('input_text.electric_week_temp_history') }}"
+          week_kwh: >
+            {% set u = states('sensor.elec_account_07249118370720160943_current_bill_electric_usage_to_date') | float(0) %}{% set ws = states('input_number.electric_week_start_usage') | float(0) %}{% set ct = states('input_number.electric_closed_total') | float(0) %}{% if ws <= 0 %}-1{% elif u >= ws %}{{ u - ws }}{% else %}{{ (ct - ws) + u }}{% endif %}
+          week_temp: "{{ (states('input_number.electric_temp_sum_week') | float(0) / states('input_number.electric_temp_n_week') | float(1)) | round(1) if states('input_number.electric_temp_n_week') | float(0) >= 3 else -999 }}"
+          cycle_temp: "{{ (states('input_number.electric_temp_sum_cycle') | float(0) / states('input_number.electric_temp_n_cycle') | float(1)) | round(1) if states('input_number.electric_temp_n_cycle') | float(0) >= 3 else -999 }}"
+          outdoor: "{{ state_attr(states('input_text.electric_weather_entity'), 'temperature') | float(-999) }}"
+          living: "{{ states('sensor.living_room_temperature_calibrated') | float(-999) }}"
+          office: "{{ states('sensor.office_temperature_calibrated') | float(-999) }}"
+          bedroom: "{{ states('sensor.bedroom_temperature_calibrated') | float(-999) }}"
+          living_h: "{{ states('sensor.h5075_3cff_humidity') | float(-999) }}"
+          office_h: "{{ states('sensor.h5075_6e4d_humidity') | float(-999) }}"
+          bedroom_h: "{{ states('sensor.h5075_f7ae_humidity') | float(-999) }}"
 
 automation:
   - id: electric_budget_alert

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Electric &amp; temperature</title>
+<style>
+  :root { color-scheme: dark; --bg: #16181d; --card: #1e2128; --line: #2b2f38; --text: #e5e7eb; --muted: #9ca3af; --blue: #3b82f6; --green: #2fb344; --red: #ef4444; --grey: #6b7280; --past: #94a3b8; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html, body { overflow-x: hidden; }
+  .wrap { width: 100%; max-width: 980px; margin: 0 auto; padding: 14px; display: grid; gap: 12px; }
+  .wrap > *, .two > * { min-width: 0; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 20px; }
+  .upd { font-size: 12px; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; overflow: hidden; }
+  .card h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .headline { font-size: 18px; font-weight: 700; line-height: 1.3; }
+  .sub { color: var(--muted); font-size: 14px; margin-top: 4px; line-height: 1.45; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; margin-right: 8px; vertical-align: 1px; }
+  .over { background: rgba(239,68,68,.18); color: #fca5a5; } .under { background: rgba(47,179,68,.18); color: #86efac; }
+  .row { display: grid; grid-template-columns: minmax(70px, 118px) 1fr minmax(96px, auto); align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
+  .row .lab { color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .val { text-align: right; white-space: nowrap; }
+  .track { background: #2a2e37; border-radius: 5px; height: 16px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 5px; transition: width .5s ease; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 720px) { .two { grid-template-columns: 1fr; } }
+  @media (max-width: 560px) {
+    .row { grid-template-columns: 1fr auto; row-gap: 3px; }
+    .row .track { grid-column: 1 / -1; order: 3; }
+    .headline { font-size: 16px; } .tile .t { font-size: 22px; }
+    table td:last-child { white-space: normal; }
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; } td { padding: 5px 0; } td:last-child { text-align: right; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.45; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .tile { background: #23262e; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .tile .n { font-size: 12px; color: var(--muted); } .tile .t { font-size: 26px; font-weight: 700; margin-top: 2px; } .tile .h { font-size: 12px; color: var(--muted); }
+  svg { width: 100%; height: auto; display: block; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .about { font-size: 12px; color: var(--muted); line-height: 1.55; }
+  .err { color: #fca5a5; text-align: center; padding: 30px 0; }
+  .hide { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="err" id="msg">Loading&hellip;</div></div>
+<script>
+(function () {
+  var key = encodeURIComponent(new URLSearchParams(location.search).get('k') || '');
+  var app = document.getElementById('app');
+  var NA = -900;
+  var COLORS = { living: '#60a5fa', office: '#f59e0b', bedroom: '#a78bfa' };
+
+  function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function n0(v) { return Math.round(v); }
+  function usd(v) { return '$' + n0(v); }
+  function parse(list) { return (list || '').split(',').filter(function (x) { return x.indexOf(':') > -1; }).map(function (x) { var p = x.split(':'); return { label: p[0], value: parseFloat(p[1]) || 0 }; }); }
+  function tmap(list) { var m = {}; parse(list).forEach(function (e) { m[e.label] = e.value; }); return m; }
+
+  function bar(label, value, scale, color, note) {
+    var pct = Math.max(2, Math.min(100, scale > 0 ? value / scale * 100 : 0));
+    return '<div class="row"><div class="lab" title="' + esc(label) + '">' + esc(label) + '</div>' +
+      '<div class="track"><div class="fill" style="width:' + pct + '%;background:' + color + '"></div></div>' +
+      '<div class="val">' + n0(value) + ' kWh' + (note ? ' &middot; ' + esc(note) : '') + '</div></div>';
+  }
+  function history(items, temps, lastLabel, lastValue, lastColor, lastNote) {
+    var top = lastValue; items.forEach(function (e) { if (e.value > top) top = e.value; });
+    var tm = tmap(temps), out = '';
+    items.forEach(function (e) { out += bar(e.label, e.value, top, 'var(--past)', tm[e.label] !== undefined ? n0(tm[e.label]) + '°F avg' : ''); });
+    return out + bar(lastLabel, lastValue, top, lastColor, lastNote);
+  }
+
+  function lineChart(series) {
+    var W = 640, H = 220, L = 38, R = 10, T = 10, B = 24;
+    var all = [], tmin = Infinity, tmax = -Infinity;
+    series.forEach(function (s) { s.pts.forEach(function (p) { all.push(p.v); if (p.t < tmin) tmin = p.t; if (p.t > tmax) tmax = p.t; }); });
+    if (!all.length) return '<div class="note">No temperature history yet.</div>';
+    var vmin = Math.floor(Math.min.apply(null, all) - 1), vmax = Math.ceil(Math.max.apply(null, all) + 1);
+    if (tmax === tmin) tmax = tmin + 1;
+    var x = function (t) { return L + (t - tmin) / (tmax - tmin) * (W - L - R); };
+    var y = function (v) { return T + (vmax - v) / (vmax - vmin) * (H - T - B); };
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Room temperatures, last 24 hours">';
+    for (var i = 0; i <= 4; i++) {
+      var v = vmin + (vmax - vmin) * i / 4, yy = y(v);
+      svg += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '" stroke="#2b2f38"/><text x="' + (L - 6) + '" y="' + (yy + 4) + '" fill="#9ca3af" font-size="11" text-anchor="end">' + n0(v) + '°</text>';
+    }
+    for (var h = 0; h <= 4; h++) {
+      var tt = tmin + (tmax - tmin) * h / 4, d = new Date(tt);
+      svg += '<text x="' + x(tt) + '" y="' + (H - 6) + '" fill="#9ca3af" font-size="11" text-anchor="' + (h === 0 ? 'start' : h === 4 ? 'end' : 'middle') + '">' + d.toLocaleTimeString([], { hour: 'numeric' }) + '</text>';
+    }
+    series.forEach(function (s) {
+      if (!s.pts.length) return;
+      var d = '', last = null;
+      s.pts.forEach(function (p, idx) { d += (idx ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + (last === null ? y(p.v) : y(last)).toFixed(1) + ' L' + x(p.t).toFixed(1) + ',' + y(p.v).toFixed(1) + ' '; last = p.v; });
+      d += 'L' + x(tmax).toFixed(1) + ',' + y(last).toFixed(1);
+      svg += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>';
+    });
+    return svg + '</svg><div class="legend">' + series.map(function (s) { return '<span><i style="background:' + s.color + '"></i>' + esc(s.name) + '</span>'; }).join('') + '</div>';
+  }
+
+  function render(a, hist24, updated) {
+    var rate = a.rate, fixed = a.fixed, used = a.used, proj = Math.max(a.forecast, used), budget = a.budget;
+    var over = proj - budget, pct = budget > 0 ? Math.abs(over / budget * 100) : 0, isOver = over > 0;
+    var scale = Math.max(used, proj, budget, 1), accent = isOver ? 'var(--red)' : 'var(--green)';
+    var head = '<header><h1>&#9889; Electric &amp; temperature</h1><div class="upd">Updated ' + esc(updated) + '</div></header>';
+
+    var summary = '<div class="card"><div class="headline"><span class="pill ' + (isOver ? 'over' : 'under') + '">' + n0(pct) + '% ' + (isOver ? 'over' : 'under') + ' budget</span>On pace for about ' + n0(proj) + ' kWh this cycle</div>' +
+      '<div class="sub">' + n0(used) + ' kWh used so far. ComEd forecasts ' + n0(a.forecast) + ' kWh against a ' + n0(budget) + ' kWh budget, roughly ' + usd(Math.abs(over) * rate) + (isOver ? ' more' : ' less') + ' than planned at the current pace.</div></div>';
+
+    var cycle = '<div class="card"><h2>This cycle (usage charges)</h2>' +
+      bar('Used so far', used, scale, 'var(--blue)', usd(used * rate)) +
+      bar('ComEd forecast', proj, scale, accent, usd(proj * rate)) +
+      bar('Budget', budget, scale, 'var(--grey)', usd(budget * rate)) +
+      '<table style="margin-top:8px"><tr><td>Estimated bill at the forecast</td><td><strong>' + usd(fixed + proj * rate) + '</strong></td></tr>' +
+      '<tr><td>Estimated bill at budget</td><td>' + usd(fixed + budget * rate) + '</td></tr>' +
+      (a.comed_cost > 0 ? '<tr><td>ComEd reports so far</td><td>$' + a.comed_cost.toFixed(2) + (a.comed_fc > 0 ? ' (forecast $' + a.comed_fc.toFixed(2) + ')' : '') + '</td></tr>' : '') +
+      '</table><div class="note">Estimated bill = about ' + usd(fixed) + ' in fixed charges plus $' + rate + ' per kWh.</div></div>';
+
+    var weeks = parse(a.whist), wt = tmap(a.wtemps), weekCard = '';
+    if (a.week_kwh >= 0 || weeks.length) {
+      var wtop = Math.max(a.week_kwh, 1); weeks.forEach(function (e) { if (e.value > wtop) wtop = e.value; });
+      var rows = weeks.map(function (e) { return bar(e.label, e.value, wtop, 'var(--past)', wt[e.label] !== undefined ? n0(wt[e.label]) + '°F avg' : ''); }).join('');
+      if (a.week_kwh >= 0) rows += bar('This week', a.week_kwh, wtop, accent, a.week_temp > NA ? n0(a.week_temp) + '°F avg' : '');
+      weekCard = '<div class="card"><h2>Week by week</h2>' + rows + '<div class="note">Each bar is the kWh ComEd recorded between Friday reports, with that week’s average outdoor temperature.</div></div>';
+    }
+
+    var cyc = '<div class="card"><h2>Recent bill cycles</h2>' +
+      history(parse(a.hist), a.temps, a.month_label + ' (forecast)', proj, accent, a.cycle_temp > NA ? n0(a.cycle_temp) + '°F avg so far' : '') +
+      '<div class="note">Past cycles are final totals from your bills. The last bar is ComEd’s projection for the cycle in progress.</div></div>';
+
+    function tile(name, t, h) { return '<div class="tile"><div class="n">' + name + '</div><div class="t">' + (t > NA ? t.toFixed(1) + '°' : '–') + '</div><div class="h">' + (h > NA ? n0(h) + '% humidity' : '&nbsp;') + '</div></div>'; }
+    var temps = '<div class="card"><h2>Temperatures now</h2><div class="tiles">' + tile('Outdoors', a.outdoor, -999) + tile('Living room', a.living, a.living_h) + tile('Office', a.office, a.office_h) + tile('Bedroom', a.bedroom, a.bedroom_h) + '</div>' +
+      '<div class="note">' + (a.week_temp > NA ? 'Outdoor average this week: ' + a.week_temp.toFixed(1) + '°F. ' : '') + (a.cycle_temp > NA ? 'This bill cycle so far: ' + a.cycle_temp.toFixed(1) + '°F.' : '') + '</div></div>';
+
+    var trend = '<div class="card"><h2>Room temperatures, last 24 hours</h2>' + lineChart(hist24) + '</div>';
+
+    var about = '<div class="card about"><strong style="color:#cbd5e1">About these numbers.</strong> Usage and cost come from your ComEd account through Home Assistant and usually run a day or more behind real use. “Forecast” is ComEd’s own projection for the current bill cycle, not a guarantee. “Budget” is a kWh target estimated for your apartment for each month; it is not a ComEd figure, and a month’s label means the bill cycle that ends in that month (cycles end around the 28th). Dollar amounts beside kWh are usage charges only; “estimated bill” adds fixed monthly charges. Outdoor temperature comes from Home Assistant’s weather source and can differ from the temperatures printed on your bill; room temperatures are your calibrated sensors. Your ComEd bill is the final word.</div>';
+
+    app.innerHTML = head + summary + '<div class="two">' + cycle + temps + '</div>' + '<div class="two">' + (weekCard || '<div class="card"><h2>Week by week</h2><div class="note">Weekly figures start after the first Friday report.</div></div>') + cyc + '</div>' + trend + about;
+  }
+
+  function load() {
+    Promise.all([
+      fetch('data?k=' + key, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }),
+      fetch('history?k=' + key, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; })
+    ]).then(function (res) {
+      var s = res[0], a = s.attributes, names = ['Living room', 'Office', 'Bedroom'], cols = [COLORS.living, COLORS.office, COLORS.bedroom];
+      ['used','forecast','budget','rate','fixed','comed_cost','comed_fc','week_kwh','week_temp','cycle_temp','outdoor','living','office','bedroom','living_h','office_h','bedroom_h'].forEach(function (k) { a[k] = parseFloat(a[k]); if (isNaN(a[k])) a[k] = -999; });
+      var series = (res[1] || []).map(function (arr, i) {
+        return { name: names[i] || 'Sensor ' + (i + 1), color: cols[i] || '#fff', pts: arr.filter(function (p) { return !isNaN(parseFloat(p.state)); }).map(function (p) { return { t: new Date(p.last_changed || p.last_updated).getTime(), v: parseFloat(p.state) }; }) };
+      });
+      render(a, series, new Date(s.last_updated || Date.now()).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }));
+    }).catch(function () { if (!app.querySelector('.card')) app.innerHTML = '<div class="err">Can’t reach Home Assistant, or the link’s key is wrong.</div>'; });
+  }
+  load();
+  setInterval(function () { if (!document.hidden) load(); }, 60000);
+})();
+</script>
+</body>
+</html>
