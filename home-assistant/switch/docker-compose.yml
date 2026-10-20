@@ -1,4 +1,6 @@
-# One-switch control page for Homarr. Needs HA_TOKEN (a Home Assistant long-lived access token) in a .env file next to this file.
+# One-switch control page for Homarr. Needs a .env file next to this file with:
+#   HA_TOKEN=<Home Assistant long-lived access token>
+#   SWITCH_KEY=<random string; the page is only reachable at /?k=<SWITCH_KEY>>
 services:
   ha-switch:
     image: nginx:1.27-alpine
@@ -8,6 +10,7 @@ services:
       - "127.0.0.1:7590:80"   # localhost only; Tailscale Serve is the way in
     environment:
       - HA_TOKEN=${HA_TOKEN}
+      - SWITCH_KEY=${SWITCH_KEY:?set SWITCH_KEY in .env}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

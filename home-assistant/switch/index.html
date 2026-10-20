@@ -36,13 +36,14 @@
   var sw = document.getElementById('sw');
   var statusEl = document.getElementById('status');
   var busy = false;
+  var key = encodeURIComponent(new URLSearchParams(location.search).get('k') || '');
 
   function show(on) { sw.setAttribute('aria-checked', on ? 'true' : 'false'); }
   function say(text, err) { statusEl.textContent = text; statusEl.className = 'status' + (err ? ' err' : ''); }
 
   function refresh() {
     if (busy) return Promise.resolve();
-    return fetch('state', { cache: 'no-store' })
+    return fetch('state?k=' + key, { cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (j) {
         if (j.state === 'on' || j.state === 'off') {
@@ -56,7 +57,7 @@
     if (sw.disabled || busy) return;
     var wasOn = sw.getAttribute('aria-checked') === 'true';
     busy = true; show(!wasOn); say(wasOn ? 'Turning off…' : 'Turning on…', false);
-    fetch('toggle', { method: 'POST' })
+    fetch('toggle?k=' + key, { method: 'POST' })
       .then(function (r) { if (!r.ok) throw new Error(r.status); })
       .then(function () { return new Promise(function (res) { setTimeout(res, 500); }); })
       .catch(function () { show(wasOn); say('That did not work', true); })

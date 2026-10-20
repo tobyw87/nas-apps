@@ -1,17 +1,25 @@
 # Serves the switch page and exposes exactly two calls to Home Assistant:
 # read this one switch's state, and toggle it. The access token stays here, never in the page.
+# The page and both calls answer only when ?k=<SWITCH_KEY> is in the address (404 otherwise).
 # Proxy headers added by Tailscale are stripped: Home Assistant rejects them from an untrusted proxy.
+# Global rate limit (all callers share one bucket behind the Tailscale proxy)
+limit_req_zone $server_name zone=sw:1m rate=10r/s;
+
 server {
     listen 80;
     server_name _;
     root /usr/share/nginx/html;
     add_header Cache-Control "no-store" always;
+    limit_req zone=sw burst=30 nodelay;
+    limit_req_status 429;
 
     location = / {
+        if ($arg_k != "${SWITCH_KEY}") { return 404; }
         try_files /index.html =404;
     }
 
     location = /state {
+        if ($arg_k != "${SWITCH_KEY}") { return 404; }
         limit_except GET { deny all; }
         proxy_pass http://host.docker.internal:8123/api/states/input_boolean.pc_audio_to_homepods;
         proxy_set_header Authorization "Bearer ${HA_TOKEN}";
@@ -23,6 +31,7 @@ server {
     }
 
     location = /toggle {
+        if ($arg_k != "${SWITCH_KEY}") { return 404; }
         limit_except POST { deny all; }
         proxy_pass http://host.docker.internal:8123/api/services/input_boolean/toggle;
         proxy_method POST;
