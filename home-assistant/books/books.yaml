@@ -1,0 +1,36 @@
+# Audiobooks waiting to be filed: reads the books button page's /status and emails a daily reminder.
+# Goes in <config>/packages/books.yaml. Needs one secret in secrets.yaml:
+#   books_status_url: http://192.168.50.133:8790/status?k=<the button page key>
+rest:
+  - resource: !secret books_status_url
+    scan_interval: 900
+    timeout: 30
+    sensor:
+      - name: "Books Waiting"
+        unique_id: books_waiting
+        value_template: "{{ value_json.waiting | length }}"
+        json_attributes:
+          - waiting
+
+automation:
+  - id: books_waiting_daily
+    alias: Books waiting to be filed (daily email)
+    mode: single
+    trigger:
+      - platform: time
+        at: "09:07:00"
+    variables:
+      old: "{{ state_attr('sensor.books_waiting', 'waiting') | default([], true) | selectattr('age_h', 'ge', 24) | list }}"
+    condition:
+      - condition: template
+        value_template: "{{ old | length > 0 }}"
+    action:
+      - service: notify.email_alerts
+        data:
+          title: "Books waiting to be filed ({{ old | length }})"
+          message: |
+            These downloads have been in book_downloads for a day or more but never reached Audiobookshelf:
+
+            {% for b in old %}- {{ b.name }}  ({{ b.ext }}, {{ b.size_mb }} MB, waiting {{ b.age_h | round(0) | int }} h)
+            {% endfor %}
+            Open the Books pipeline page and use "Waiting to be filed": check the author and title, then press File it. Press Ignore if one isn't an audiobook you want filed.
