@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="darkreader-lock">
+<meta name="color-scheme" content="dark">
 <title>Electric &amp; temperature</title>
 <style>
   :root { color-scheme: dark; --bg: #16181d; --card: #1e2128; --line: #2b2f38; --text: #e5e7eb; --muted: #9ca3af; --blue: #3b82f6; --green: #2fb344; --red: #ef4444; --grey: #6b7280; --past: #94a3b8; }
@@ -74,30 +76,45 @@
     return out + bar(lastLabel, lastValue, top, lastColor, lastNote);
   }
 
+  // Average each sensor into 10-minute points (carrying the last value across gaps), then lightly smooth.
+  function resample(pts, t0, t1) {
+    var BIN = 10 * 60000, out = [], i = 0, last = null, n = Math.ceil((t1 - t0) / BIN);
+    pts = pts.slice().sort(function (a, b) { return a.t - b.t; });
+    for (var k = 0; k < n; k++) {
+      var s = t0 + k * BIN, e = s + BIN, sum = 0, c = 0;
+      while (i < pts.length && pts[i].t < e) { if (pts[i].t >= s) { sum += pts[i].v; c++; } last = pts[i].v; i++; }
+      var v = c ? sum / c : last;
+      if (v !== null) out.push({ t: s + BIN / 2, v: v });
+    }
+    return out.map(function (p, j) {
+      var a = out[Math.max(0, j - 1)].v, b = out[Math.min(out.length - 1, j + 1)].v;
+      return { t: p.t, v: (a + p.v * 2 + b) / 4 };
+    });
+  }
+
   function lineChart(series) {
     var W = 640, H = 220, L = 38, R = 10, T = 10, B = 24;
-    var all = [], tmin = Infinity, tmax = -Infinity;
-    series.forEach(function (s) { s.pts.forEach(function (p) { all.push(p.v); if (p.t < tmin) tmin = p.t; if (p.t > tmax) tmax = p.t; }); });
+    var t1 = Date.now(), t0 = t1 - 24 * 3600000;
+    series = series.map(function (s) { return { name: s.name, color: s.color, pts: resample(s.pts, t0, t1) }; });
+    var all = [];
+    series.forEach(function (s) { s.pts.forEach(function (p) { all.push(p.v); }); });
     if (!all.length) return '<div class="note">No temperature history yet.</div>';
     var vmin = Math.floor(Math.min.apply(null, all) - 1), vmax = Math.ceil(Math.max.apply(null, all) + 1);
-    if (tmax === tmin) tmax = tmin + 1;
-    var x = function (t) { return L + (t - tmin) / (tmax - tmin) * (W - L - R); };
+    var x = function (t) { return L + (t - t0) / (t1 - t0) * (W - L - R); };
     var y = function (v) { return T + (vmax - v) / (vmax - vmin) * (H - T - B); };
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Room temperatures, last 24 hours">';
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Room temperatures, last 24 hours" shape-rendering="geometricPrecision">';
     for (var i = 0; i <= 4; i++) {
       var v = vmin + (vmax - vmin) * i / 4, yy = y(v);
-      svg += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '" stroke="#2b2f38"/><text x="' + (L - 6) + '" y="' + (yy + 4) + '" fill="#9ca3af" font-size="11" text-anchor="end">' + n0(v) + '°</text>';
+      svg += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + yy.toFixed(1) + '" y2="' + yy.toFixed(1) + '" stroke="#2b2f38" stroke-width="1"/><text x="' + (L - 6) + '" y="' + (yy + 4).toFixed(1) + '" fill="#9ca3af" font-size="11" text-anchor="end">' + n0(v) + '\u00b0</text>';
     }
     for (var h = 0; h <= 4; h++) {
-      var tt = tmin + (tmax - tmin) * h / 4, d = new Date(tt);
-      svg += '<text x="' + x(tt) + '" y="' + (H - 6) + '" fill="#9ca3af" font-size="11" text-anchor="' + (h === 0 ? 'start' : h === 4 ? 'end' : 'middle') + '">' + d.toLocaleTimeString([], { hour: 'numeric' }) + '</text>';
+      var tt = t0 + (t1 - t0) * h / 4, d = new Date(tt);
+      svg += '<text x="' + x(tt).toFixed(1) + '" y="' + (H - 6) + '" fill="#9ca3af" font-size="11" text-anchor="' + (h === 0 ? 'start' : h === 4 ? 'end' : 'middle') + '">' + d.toLocaleTimeString([], { hour: 'numeric' }) + '</text>';
     }
     series.forEach(function (s) {
-      if (!s.pts.length) return;
-      var d = '', last = null;
-      s.pts.forEach(function (p, idx) { d += (idx ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + (last === null ? y(p.v) : y(last)).toFixed(1) + ' L' + x(p.t).toFixed(1) + ',' + y(p.v).toFixed(1) + ' '; last = p.v; });
-      d += 'L' + x(tmax).toFixed(1) + ',' + y(last).toFixed(1);
-      svg += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>';
+      if (s.pts.length < 2) return;
+      var d = s.pts.map(function (p, idx) { return (idx ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + y(p.v).toFixed(1); }).join(' ');
+      svg += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     });
     return svg + '</svg><div class="legend">' + series.map(function (s) { return '<span><i style="background:' + s.color + '"></i>' + esc(s.name) + '</span>'; }).join('') + '</div>';
   }
