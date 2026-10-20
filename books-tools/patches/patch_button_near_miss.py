@@ -10,7 +10,8 @@ import sys
 import time
 
 path = sys.argv[1]
-src = open(path, encoding="utf-8").read()
+src = open(path, encoding="utf-8", newline="").read()      # newline="": keep the file's own line endings
+CRLF = "\r\n" in src
 
 if "_hint_near_miss" in src:
     sys.exit("Already patched - nothing to do.")
@@ -34,24 +35,28 @@ NEW_FUNC = '''def _hint_near_miss(entries, exts, r, fmt):
 
 def seedbox_downloads():'''
 
-OLD_DEF = "def seedbox_downloads():"
-OLD_USE = '''        cands = [e for e in entries if e[2] & exts and _matches(e[0], r)]
-        if not cands:
-            continue
-'''
-NEW_USE = '''        cands = [e for e in entries if e[2] & exts and _matches(e[0], r)]
-        if not cands:
-            _hint_near_miss(entries, exts, r, fmt)
-            continue
-'''
-for old in (OLD_DEF, OLD_USE):
-    if src.count(old) != 1:
-        sys.exit(f"Can't patch: expected exactly one copy of this text, found {src.count(old)}:\n{old}")
+import re
+
+DEF_RE = re.compile(r"^def seedbox_downloads\(\):", re.M)
+USE_RE = re.compile(
+    r"^(?P<ind>[ \t]*)cands = \[e for e in entries if e\[2\] & exts and _matches\(e\[0\], r\)\][ \t]*(?P<eol>\r?\n)",
+    re.M)
+for label, rx in (("def seedbox_downloads", DEF_RE), ("the 'cands = ...' line", USE_RE)):
+    n = len(rx.findall(src))
+    if n != 1:
+        sys.exit(f"Can't patch: expected exactly one match for {label}, found {n}. Nothing was changed.")
+
+def add_hint(m):
+    ind, eol = m.group("ind"), m.group("eol")
+    # keep the original line, then report a near miss when nothing matched (the original 'if not cands' still follows)
+    return (m.group(0) + f"{ind}if not cands:{eol}{ind}    _hint_near_miss(entries, exts, r, fmt){eol}")
 
 backup = f"{path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
 shutil.copy2(path, backup)
-src = src.replace(OLD_DEF, NEW_FUNC, 1).replace(OLD_USE, NEW_USE, 1)
-open(path, "w", encoding="utf-8").write(src)
+src = USE_RE.sub(add_hint, src, count=1)
+new_func = NEW_FUNC.replace("\n", "\r\n") if CRLF else NEW_FUNC
+src = DEF_RE.sub(lambda m: new_func, src, count=1)
+open(path, "w", encoding="utf-8", newline="").write(src)
 try:
     py_compile.compile(path, doraise=True)
 except py_compile.PyCompileError as e:
