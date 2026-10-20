@@ -1,5 +1,6 @@
 # Serves the switch page and exposes exactly two calls to Home Assistant:
 # read this one switch's state, and toggle it. The access token stays here, never in the page.
+# Proxy headers added by Tailscale are stripped: Home Assistant rejects them from an untrusted proxy.
 server {
     listen 80;
     server_name _;
@@ -14,6 +15,11 @@ server {
         limit_except GET { deny all; }
         proxy_pass http://host.docker.internal:8123/api/states/input_boolean.pc_audio_to_homepods;
         proxy_set_header Authorization "Bearer ${HA_TOKEN}";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Real-IP "";
+        proxy_set_header Forwarded "";
     }
 
     location = /toggle {
@@ -21,6 +27,11 @@ server {
         proxy_pass http://host.docker.internal:8123/api/services/input_boolean/toggle;
         proxy_method POST;
         proxy_set_header Authorization "Bearer ${HA_TOKEN}";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Real-IP "";
+        proxy_set_header Forwarded "";
         proxy_set_header Content-Type "application/json";
         proxy_set_body '{"entity_id":"input_boolean.pc_audio_to_homepods"}';
     }
