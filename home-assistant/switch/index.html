@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC audio to HomePods</title>
+<style>
+  :root { color-scheme: dark; --on: #2fb344; --off: #4b5563; --text: #e5e7eb; --muted: #9ca3af; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; background: transparent; font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text); }
+  main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 12px; text-align: center; }
+  h1 { margin: 0; font-size: clamp(14px, 4.2vw, 18px); font-weight: 700; line-height: 1.25; }
+  .switch { position: relative; width: 116px; height: 62px; border: 0; padding: 0; border-radius: 999px; background: var(--off); cursor: pointer;
+            box-shadow: inset 0 2px 6px rgba(0,0,0,.45); transition: background .25s ease, box-shadow .25s ease; outline-offset: 4px; }
+  .switch:focus-visible { outline: 3px solid #93c5fd; }
+  .switch[aria-checked="true"] { background: var(--on); box-shadow: inset 0 2px 6px rgba(0,0,0,.35), 0 0 18px rgba(47,179,68,.45); }
+  .knob { position: absolute; top: 5px; left: 5px; width: 52px; height: 52px; border-radius: 999px; background: #fff;
+          box-shadow: 0 3px 8px rgba(0,0,0,.45); transition: left .25s cubic-bezier(.3,1.4,.5,1), width .12s ease; }
+  .switch[aria-checked="true"] .knob { left: calc(100% - 57px); }
+  .switch:active .knob { width: 64px; }
+  .switch[aria-checked="true"]:active .knob { left: calc(100% - 69px); }
+  .switch[disabled] { opacity: .55; cursor: default; }
+  .status { min-height: 1.3em; font-size: 14px; color: var(--muted); letter-spacing: .02em; }
+  .status.err { color: #fca5a5; }
+  .init .switch, .init .knob { transition: none !important; }
+</style>
+</head>
+<body class="init">
+<main>
+  <h1>PC audio to HomePods</h1>
+  <button id="sw" class="switch" role="switch" aria-checked="false" aria-label="PC audio to HomePods" disabled><span class="knob"></span></button>
+  <div id="status" class="status">Connecting&hellip;</div>
+</main>
+<script>
+(function () {
+  var sw = document.getElementById('sw');
+  var statusEl = document.getElementById('status');
+  var busy = false;
+
+  function show(on) { sw.setAttribute('aria-checked', on ? 'true' : 'false'); }
+  function say(text, err) { statusEl.textContent = text; statusEl.className = 'status' + (err ? ' err' : ''); }
+
+  function refresh() {
+    if (busy) return Promise.resolve();
+    return fetch('state', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (j) {
+        if (j.state === 'on' || j.state === 'off') {
+          show(j.state === 'on'); sw.disabled = false; say(j.state === 'on' ? 'On' : 'Off', false);
+        } else { sw.disabled = true; say('Unavailable', true); }
+      })
+      .catch(function () { sw.disabled = true; say("Can't reach Home Assistant", true); });
+  }
+
+  sw.addEventListener('click', function () {
+    if (sw.disabled || busy) return;
+    var wasOn = sw.getAttribute('aria-checked') === 'true';
+    busy = true; show(!wasOn); say(wasOn ? 'Turning off…' : 'Turning on…', false);
+    fetch('toggle', { method: 'POST' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); })
+      .then(function () { return new Promise(function (res) { setTimeout(res, 500); }); })
+      .catch(function () { show(wasOn); say('That did not work', true); })
+      .then(function () { busy = false; return refresh(); });
+  });
+
+  refresh().then(function () { requestAnimationFrame(function () { requestAnimationFrame(function () { document.body.classList.remove('init'); }); }); });
+  setInterval(function () { if (!document.hidden) refresh(); }, 3000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
+})();
+</script>
+</body>
+</html>
