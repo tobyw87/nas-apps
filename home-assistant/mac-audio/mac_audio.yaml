@@ -1,0 +1,36 @@
+# Mac audio to HomePods: a switch that plays the stream the MacBook's login job sends to Icecast (mac.mp3)
+# on the HomePod group in Music Assistant, and stops it again. Install as packages/mac_audio.yaml.
+# The PC button (input_boolean.pc_audio_to_homepods) is left alone.
+input_boolean:
+  mac_audio_to_homepods:
+    name: Mac audio to HomePods
+    icon: mdi:laptop
+
+automation:
+  - id: mac_audio_to_homepods_on
+    alias: "Mac audio to HomePods: start"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: input_boolean.mac_audio_to_homepods
+        to: "on"
+    action:
+      - service: music_assistant.play_media
+        target:
+          entity_id: media_player.homepod_minis
+        data:
+          media_id: "http://192.168.50.133:18000/mac.mp3"
+          media_type: radio
+          enqueue: replace
+
+  - id: mac_audio_to_homepods_off
+    alias: "Mac audio to HomePods: stop"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: input_boolean.mac_audio_to_homepods
+        to: "off"
+    action:
+      - service: media_player.media_stop
+        target:
+          entity_id: media_player.homepod_minis
