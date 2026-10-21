@@ -30,7 +30,8 @@ blocks = []
 for n, h in enumerate(heads):
     end = heads[n + 1] if n + 1 < len(heads) else len(lines)
     blocks.append((h, end))
-hits = [(h, e) for h, e in blocks if any("books-button" in l or "button.py" in l for l in lines[h:e])]
+hits = [(h, e) for h, e in blocks
+        if any(re.search(r"container_name:\s*[\"']?books-button[\"']?\s*$", l) or "/app/button.py" in l for l in lines[h:e])]
 if len(hits) != 1:
     sys.exit(f"Can't patch: expected exactly one books-button service, found {len(hits)}. Nothing was changed.")
 h, e = hits[0]
