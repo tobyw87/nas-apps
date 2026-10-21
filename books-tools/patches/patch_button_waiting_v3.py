@@ -60,7 +60,7 @@ CLEAN = r'''def _clean_title(t):
     t = re.sub(r"\.fail$", "", t, flags=re.I)
     t = re.sub(r"\.(" + "|".join(sorted(WAIT_EXTS)) + r")$", "", t, flags=re.I).replace("_", " ")
     t = re.sub(r"\s*[\[(][^\])]*[\])]", "", t)                                        # [tags] and (tags)
-    t = re.sub(r"[,:\-\u2013]?\s*\b[\w'’]+ Series,?\s*Book\s*\d+\b", "", t, flags=re.I)     # "Culture Series, Book 3"
+    t = re.sub(r"[,:\-\u2013]?\s*\b[\w'\u2019]+ Series,?\s*Book\s*\d+\b", "", t, flags=re.I)     # "Culture Series, Book 3"
     t = re.sub(r"[,:\-\u2013]?\s*\bBook\s*\d+\b", "", t, flags=re.I)                        # "Book 2"
     t = re.sub(r"\s+A Novel$", "", t, flags=re.I)
     return re.sub(r"\s+", " ", t).strip(" -\u2013,:")
