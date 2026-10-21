@@ -20,7 +20,7 @@ TAGS = re.compile(r"\s*[\[(][^\])]*[\])]")
 
 
 def clean(base):
-    s = base.replace(" – ", " - ").replace(" — ", " - ")
+    s = base.replace(" \u2013 ", " - ").replace(" \u2014 ", " - ")
     parts = [p.strip() for p in s.split(" - ")]
     keep = []
     for p in parts:
