@@ -12,8 +12,8 @@ if [ -z "$ICECAST_PASS" ]; then
 fi
 echo "Streaming to Icecast... leave this window open, Ctrl-C to stop"
 while true; do
-  ffmpeg -hide_banner -loglevel warning -f avfoundation -i ":$DEVICE" \
-    -c:a libmp3lame -b:a 192k -ar 44100 -ac 2 \
+  ffmpeg -hide_banner -loglevel warning -thread_queue_size 4096 -f avfoundation -i ":$DEVICE" \
+    -c:a libmp3lame -b:a 192k -ac 2 \
     -content_type audio/mpeg -ice_name "MacBook" -f mp3 \
     "icecast://source:${ICECAST_PASS}@${HOST}:${PORT}/${MOUNT}" 2>&1 | sed "s/${ICECAST_PASS}/*****/g"
   echo "Stream stopped; retrying in 5 s (Ctrl-C to quit)"; sleep 5
