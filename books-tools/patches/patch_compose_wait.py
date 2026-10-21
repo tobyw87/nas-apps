@@ -6,6 +6,7 @@ and the list re-scans every 2 minutes (was 10).
 Usage: python3 patch_compose_wait.py /path/to/docker-compose.yml
 Makes a backup, refuses to run twice, changes nothing if it can't find exactly one books-button service.
 """
+import os
 import re
 import shutil
 import sys
@@ -53,4 +54,4 @@ shutil.copy2(path, backup)
 lines[env + 1:env + 1] = new
 open(path, "w", encoding="utf-8", newline="").write(nl.join(lines))
 print(f"Patched {path} (backup: {backup})")
-print(f"Next: cd {path.rsplit('/', 1)[0] or '.'} && sudo docker compose up -d {name}")
+print(f"Next: cd {os.path.dirname(os.path.abspath(path))} && sudo docker compose up -d {name}")
