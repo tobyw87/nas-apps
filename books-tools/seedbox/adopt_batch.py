@@ -8,9 +8,11 @@ For a batch like book_downloads/Boxcar Children 1-138/ where every sub-folder is
 Plus the pipeline's duplicate rule: if ABS already holds an audio file of the same type and size anywhere under the
 author's folder, that book is reported as 'already in ABS' and skipped.
 
-Usage: python3 adopt_batch.py "<folder inside book_downloads>" "<Author>" [--apply] [--title-re REGEX]
-  --title-re  regex with ONE group that captures the title from a sub-folder name.
-              Default (Boxcar Children style): ^.* - BC \\d+ - (.+?) - [^-]+? \\(Ch\\)$
+Usage: python3 adopt_batch.py "<folder inside book_downloads>" "<Author>" [--apply] [--title-re REGEX] [--folder-fmt FMT]
+  --title-re    regex matched against each sub-folder name; its groups feed --folder-fmt.
+                Default (Boxcar Children style): ^.* - BC (\\d+) - (.+?) - [^-]+? \\(Ch\\)$   (group 1 = number, 2 = title)
+  --folder-fmt  the ABS folder name, with {1}, {2} ... standing for the regex groups.
+                Default: "BC {1} - {2}"  ->  BC 134 - The Mystery of the Stolen Snowboard
 """
 import argparse
 import os
@@ -22,7 +24,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("folder")
 ap.add_argument("author")
 ap.add_argument("--apply", action="store_true")
-ap.add_argument("--title-re", default=r"^.* - BC \d+ - (.+?) - [^-]+? \(Ch\)$")
+ap.add_argument("--title-re", default=r"^.* - BC (\d+) - (.+?) - [^-]+? \(Ch\)$")
+ap.add_argument("--folder-fmt", default="BC {1} - {2}")
 a = ap.parse_args()
 
 dl = os.path.expanduser(os.environ.get("BOOK_DOWNLOADS", "~/book_downloads"))
@@ -61,7 +64,10 @@ for name in sorted(os.listdir(src_root)):
     if not m:
         odd.append(name)
         continue
-    title = re.sub(r"\s+", " ", m.group(1)).strip()
+    try:
+        title = re.sub(r"\s+", " ", a.folder_fmt.format("", *m.groups())).strip()
+    except (IndexError, KeyError):
+        sys.exit("--folder-fmt uses a group number the --title-re doesn't have.")
     if "/" in title or ".." in title:
         odd.append(name)
         continue
