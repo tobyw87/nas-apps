@@ -10,6 +10,7 @@ The laptop's audio isn't a media session on this PC, so it is never paused.
 Setup (Windows, once):  pip install sounddevice numpy winrt-runtime winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Foundation.Collections
   python laptop_pause.py --list            show recording devices
   python laptop_pause.py --calibrate       print the line's level for 10 s (play laptop audio, then stay silent)
+  python laptop_pause.py --sessions       list the media sessions Windows sees (start something playing first)
   python laptop_pause.py --dry-run         say what it would do, pause nothing
   python laptop_pause.py                   run it (Ctrl+C to stop)
 Options: --device "USB Audio Device" (part of the name)  --threshold -45 (dB, from --calibrate)
@@ -86,6 +87,18 @@ async def resume_paused(mgr, ids):
             await s.try_play_async()
 
 
+async def list_sessions():
+    from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionPlaybackStatus as S
+    mgr = await media_manager()
+    sessions = list(mgr.get_sessions())
+    if not sessions:
+        print("Windows reports no media sessions at all.")
+    for s in sessions:
+        info = s.get_playback_info()
+        status = S(info.playback_status).name if info else "unknown"
+        print(f"{s.source_app_user_model_id}: {status}")
+
+
 async def run(a):
     import sounddevice as sd
     dev = pick_device(a.device)
@@ -133,6 +146,7 @@ def main():
     p.add_argument("--off", type=float, default=8.0)
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--list", action="store_true")
+    p.add_argument("--sessions", action="store_true")
     p.add_argument("--calibrate", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args()
@@ -141,6 +155,9 @@ def main():
         for i, d in enumerate(sd.query_devices()):
             if d["max_input_channels"] > 0:
                 print(i, d["name"])
+        return
+    if a.sessions:
+        asyncio.run(list_sessions())
         return
     try:
         asyncio.run(run(a))
