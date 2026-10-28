@@ -35,7 +35,7 @@ if not os.path.isdir(src_root):
     sys.exit(f"Not found: {src_root}")
 if any(c in a.author for c in "/\\") or ".." in a.author:
     sys.exit("The author can't contain / or ..")
-rx = re.compile(a.title_re)
+rx = re.compile(a.title_re, re.I)
 author_dir = os.path.join(absd, a.author)
 
 # audio files ABS already has under this author: (extension, size)
