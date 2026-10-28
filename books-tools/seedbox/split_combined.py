@@ -67,7 +67,7 @@ for num, title, files in plan:
     if a.apply:
         os.makedirs(dest)
         for i, f in enumerate(files, 1):
-            os.link(os.path.join(src, f), os.path.join(dest, f"{title} {i:0{len(str(len(files)))if len(files)>99 else 2}d}.mp3"))
+            os.link(os.path.join(src, f), os.path.join(dest, f"{title} {i:02d}.mp3"))
         with open(os.path.join(dest, "metadata.opf"), "w", encoding="utf-8") as fh:
             fh.write(
                 '<?xml version="1.0" encoding="utf-8"?>\n'
