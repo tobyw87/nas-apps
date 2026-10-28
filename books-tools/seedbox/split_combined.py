@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dry run by default: split one combined audiobook folder into separate Audiobookshelf book folders.
 
-Hard-links (never copies or moves) the numbered tracks of a combined download into one folder per book under
+Hard-links (never copies or moves) the numbered tracks, renamed 'Title 01.mp3', 'Title 02.mp3' and so on, of a combined download into one folder per book under
 ABS/<Author>/<Title>/, and writes a metadata.opf with the series and number for each. The source stays where it is,
 so the torrent keeps seeding. Existing folders are never overwritten.
 
@@ -63,11 +63,11 @@ for num, title, files in plan:
 for num, title, files in plan:
     dest = os.path.join(abs_dir, a.author, f"{int(num):03d} - {title}")
     print(f"{'linking' if a.apply else 'would link'} {len(files)} tracks -> {dest}")
-    print(f"    first: {files[0]}\n    last:  {files[-1]}")
+    print(f"    {files[0]}  ->  {title} 01.mp3\n    {files[-1]}  ->  {title} {len(files):02d}.mp3")
     if a.apply:
         os.makedirs(dest)
-        for f in files:
-            os.link(os.path.join(src, f), os.path.join(dest, f))
+        for i, f in enumerate(files, 1):
+            os.link(os.path.join(src, f), os.path.join(dest, f"{title} {i:0{len(str(len(files)))if len(files)>99 else 2}d}.mp3"))
         with open(os.path.join(dest, "metadata.opf"), "w", encoding="utf-8") as fh:
             fh.write(
                 '<?xml version="1.0" encoding="utf-8"?>\n'
