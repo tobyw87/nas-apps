@@ -3,7 +3,7 @@
 
 Watches the level of a recording device (the USB adapter the laptop's audio cable is plugged into). When sound
 stays above a threshold for a moment, every media session on this PC that is playing (browser, Spotify, ...) is paused.
-When the line has been quiet for a while, only the sessions this script paused are resumed.
+It never resumes anything by itself (add --resume if you want the sessions it paused to restart once the laptop has been quiet a while).
 It uses Windows' own media controls, so it pauses (never toggles) and leaves anything you paused yourself alone.
 The laptop's audio isn't a media session on this PC, so it is never paused.
 
@@ -14,7 +14,7 @@ Setup (Windows, once):  pip install sounddevice numpy winrt-runtime winrt-Window
   python laptop_pause.py --dry-run         say what it would do, pause nothing
   python laptop_pause.py                   run it (Ctrl+C to stop)
 Options: --device "USB Audio Device" (part of the name)  --threshold -45 (dB, from --calibrate)
-         --on 1.0 (seconds of sound before pausing)  --off 8.0 (seconds of quiet before resuming)  --no-resume
+         --on 1.0 (seconds of sound before pausing)  --off 8.0 (seconds of quiet before 'laptop audio stopped')  --resume
 """
 import argparse
 import asyncio
@@ -132,7 +132,7 @@ async def run(a):
                     print("   paused:", ", ".join(sorted(paused)) or "nothing was playing")
             elif ev == "stop":
                 print(time.strftime("%H:%M:%S"), "laptop audio stopped")
-                if mgr and paused and not a.no_resume:
+                if mgr and paused and a.resume:
                     await resume_paused(mgr, paused)
                     print("   resumed:", ", ".join(sorted(paused)))
                 paused = set()
@@ -144,7 +144,7 @@ def main():
     p.add_argument("--threshold", type=float, default=-45.0)
     p.add_argument("--on", type=float, default=1.0)
     p.add_argument("--off", type=float, default=8.0)
-    p.add_argument("--no-resume", action="store_true")
+    p.add_argument("--resume", action="store_true")
     p.add_argument("--list", action="store_true")
     p.add_argument("--sessions", action="store_true")
     p.add_argument("--calibrate", action="store_true")
