@@ -1,0 +1,47 @@
+alias: Paint table lamp
+description: >-
+  Paints the Table Lamp with a custom colour pattern, one colour per segment.
+  The lamp has 16 segments stacked vertically: segment 1 is the BOTTOM of the
+  lamp and segment 16 is the TOP. Use this whenever someone asks the lamp to
+  look like something (a volcano, the ocean, a sunset, a forest, a holiday...):
+  invent 16 colours that evoke it, ordered bottom to top, and pass them as
+  hex codes. Fewer than 16 colours repeat in order. Use plain light colour
+  controls instead when only one solid colour is wanted.
+mode: restart
+fields:
+  colors:
+    name: Colours
+    description: >-
+      16 colours as hex codes separated by commas, from segment 1 (bottom) to
+      segment 16 (top). Example: #3B0000,#8B0000,#B22222,#FF4500,...
+    required: true
+    example: "#3B0000,#8B0000,#B22222,#FF4500,#FF6A00,#FF8C00,#FFA500,#FFB300,#FFC400,#FF8C00,#FF4500,#8B2500,#4A1A0A,#2B2B2B,#3C3C3C,#1E1E1E"
+    selector:
+      text:
+  brightness:
+    name: Brightness
+    description: Overall brightness in percent (1-100). Defaults to 100.
+    required: false
+    selector:
+      number:
+        min: 1
+        max: 100
+        unit_of_measurement: "%"
+sequence:
+  - variables:
+      cols: "{{ colors.replace(' ', '').split(',') | select | list }}"
+  - action: light.turn_on
+    target:
+      entity_id: light.table_lamp
+    data:
+      brightness_pct: "{{ brightness | default(100) | int }}"
+  - repeat:
+      for_each: "{{ range(1, 17) | list }}"
+      sequence:
+        - variables:
+            hexc: "{{ cols[(repeat.item - 1) % (cols | length)] | replace('#', '') }}"
+        - action: light.turn_on
+          target:
+            entity_id: "{{ 'light.table_lamp_segment_%03d' % repeat.item }}"
+          data:
+            rgb_color: "{{ [hexc[0:2] | int(0, 16), hexc[2:4] | int(0, 16), hexc[4:6] | int(0, 16)] }}"
