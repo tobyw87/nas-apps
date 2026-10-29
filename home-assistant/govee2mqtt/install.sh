@@ -48,6 +48,7 @@ if [ ! -f mosquitto/config/passwd ]; then
     mosquitto_passwd -c -b /mosquitto/config/passwd "$GOVEE_MQTT_USER" "$GOVEE_MQTT_PASSWORD"
 fi
 chown -R 1883:1883 mosquitto
+chown -R 1000:1000 data          # govee2mqtt runs as govee (1000:1000); root-owned data -> "failed to open cache"
 chmod 0700 mosquitto/config/passwd
 
 docker compose up -d
