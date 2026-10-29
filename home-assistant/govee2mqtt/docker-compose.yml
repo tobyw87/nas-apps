@@ -1,0 +1,27 @@
+# Govee scenes in Home Assistant: govee2mqtt (cloud scene list + LAN control) and a Mosquitto broker.
+# Install on the NAS in /volume1/docker/govee2mqtt with install.sh (writes .env and the broker password).
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+
+  govee2mqtt:
+    image: ghcr.io/wez/govee2mqtt:latest
+    container_name: govee2mqtt
+    restart: unless-stopped
+    network_mode: host          # LAN discovery of the lamps
+    env_file: .env              # Govee login, API key, MQTT login (never committed)
+    environment:
+      - TZ=America/Chicago
+      - XDG_CACHE_HOME=/data
+      - RUST_LOG_STYLE=always
+    volumes:
+      - ./data:/data
+    depends_on:
+      - mosquitto
