@@ -7,6 +7,8 @@ services:
     container_name: matter-server
     restart: unless-stopped
     network_mode: host          # Matter needs the LAN directly (mDNS + IPv6)
+    # Use only the LAN interface; the NAS's many docker-* interfaces break mDNS ("No endpoint was available").
+    command: ["--storage-path", "/data", "--paa-root-cert-dir", "/data/credentials", "--primary-interface", "ovs_eth0"]
     security_opt:
       - apparmor:unconfined
     volumes:
