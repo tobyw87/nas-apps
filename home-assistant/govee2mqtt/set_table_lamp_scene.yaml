@@ -1,0 +1,49 @@
+alias: Set table lamp scene
+description: >-
+  Starts one of the Table Lamp's built-in animated Govee scenes. Use this when
+  a request clearly matches one of these scene names (pick the closest one):
+  Accompany, Afternoon, Aurora, Breathe, Candy Cane, Candy Cane B, Cherry
+  blossoms, Christmas, Christmas Baubles, Christmas Bell, Christmas Eve,
+  Christmas Gift, Christmas Stocking, Christmas Stripe, Christmas Stripe B,
+  Christmas Stripe C, Christmas Stripe D, Christmas Tree, Christmas Wreath,
+  Classic Christmas, Desert, Dreamland, Dreamlike, Earth, Easter Egg, Fall,
+  Falling Petals, Feather, Fire, Firefly, Fish tank, Flash, Forest, Gary,
+  Ghost, Gingerbread Man, Goldfish, Gradient, Graffiti, Grim Graveyard,
+  Halloween, Halloween Witches, Healing, Heartbeat, Interlaced, Joyful, Judy,
+  Jupiter, Karst Cave, Kitchen Aromas, Lake, Leisure, Lightning Bats, Mars,
+  Milky Way, Morning, Mother's Hug, Mountain Forest, Mysterious, Nick, Night,
+  Night Light, Ocean, Poison, Pumpkin Spice, Rainbow, Raining, Reading,
+  Refreshing, Rubik's Cube, Saint Patrick's Day, Santa Claus, Santa Hat, Sky,
+  Smudge, Snow flake, Snow House, Soothing, Spring, Spring Wind, Starry Sky,
+  Summer, Sunrise, Sunset, Sunset Glow, Swing, Thanksgiving, Train, Uranus,
+  Valentine's Day, Venus, Wave, White Light, Winter, ZDP Duo, ZDP Trio.
+  (Music: Energic / Rhythm / Rolling / Spectrum react to sound - only when
+  music mode is asked for.) If nothing on the list fits well, use the
+  "Paint table lamp" script instead and design a custom pattern.
+mode: restart
+fields:
+  scene:
+    name: Scene
+    description: Exact name of one scene from the list in the description, e.g. Aurora.
+    required: true
+    example: Aurora
+    selector:
+      text:
+sequence:
+  - variables:
+      match: >-
+        {%- set ns = namespace(m='') -%}
+        {%- for x in state_attr('light.table_lamp', 'effect_list') or [] -%}
+        {%- if x | lower | replace('’', "'") | trim == scene | lower | replace('’', "'") | trim -%}
+        {%- set ns.m = x -%}{%- endif -%}{%- endfor -%}{{ ns.m }}
+  - if:
+      - condition: template
+        value_template: "{{ match == '' }}"
+    then:
+      - stop: "No scene with that name. Pick a name from the list, or use Paint table lamp."
+        error: true
+  - action: light.turn_on
+    target:
+      entity_id: light.table_lamp
+    data:
+      effect: "{{ match }}"

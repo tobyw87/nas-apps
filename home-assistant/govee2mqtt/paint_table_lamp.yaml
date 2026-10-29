@@ -6,7 +6,9 @@ description: >-
   look like something (a volcano, the ocean, a sunset, a forest, a holiday...):
   invent 16 colours that evoke it, ordered bottom to top, and pass them as
   hex codes. Fewer than 16 colours repeat in order. Use plain light colour
-  controls instead when only one solid colour is wanted.
+  controls instead when only one solid colour is wanted, and prefer the "Set
+  table lamp scene" script when one of the lamp's built-in scenes clearly
+  matches (those are animated).
 mode: restart
 fields:
   colors:
