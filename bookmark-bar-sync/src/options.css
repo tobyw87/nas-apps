@@ -1,0 +1,18 @@
+:root { color-scheme: light dark; --accent: #2563eb; }
+body { font: 15px/1.5 system-ui, sans-serif; margin: 0; }
+main { max-width: 640px; margin: 2rem auto; padding: 0 1.25rem; }
+h1 { margin-bottom: .2rem; }
+.lead { margin-top: 0; opacity: .75; }
+section { border: 1px solid #8884; border-radius: 10px; padding: 1rem 1.25rem; margin: 1.25rem 0; }
+h2 { font-size: 1.05rem; margin: 0 0 .75rem; }
+label { display: block; margin: .6rem 0; font-weight: 600; }
+label small { font-weight: 400; opacity: .7; }
+input { display: block; width: 100%; box-sizing: border-box; margin-top: .25rem; padding: .45rem .6rem; font: inherit; border: 1px solid #8886; border-radius: 6px; background: transparent; color: inherit; }
+button { font: inherit; padding: .45rem .9rem; border-radius: 6px; border: 0; background: var(--accent); color: #fff; cursor: pointer; }
+button.secondary { background: transparent; color: inherit; border: 1px solid #8886; }
+button:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: .75rem; }
+.error { color: #d93025; }
+.ok { color: #188038; }
+.warn { background: #f9ab0022; border-radius: 8px; padding: .5rem .9rem; }
+.note { font-size: .9rem; opacity: .75; }

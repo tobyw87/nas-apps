@@ -1,0 +1,26 @@
+# Linkwarden bookmark manager for Treebeard.
+# Reached through the Cloudflare Tunnel (links.tobyw87.com -> http://localhost:${HOST_PORT}),
+# behind Cloudflare Access. Only listens on 127.0.0.1, so nothing on the LAN can reach it directly.
+# Page archiving (screenshots/PDFs via headless Chromium) is off to spare the NAS's CPU, RAM and disks,
+# and Meilisearch is left out: Linkwarden falls back to plain database search.
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./data/pgdata:/var/lib/postgresql/data
+
+  linkwarden:
+    image: ghcr.io/linkwarden/linkwarden:latest
+    env_file: .env
+    environment:
+      DATABASE_URL: "postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres"
+      DISABLE_PRESERVATION: "true"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${HOST_PORT}:3000"
+    volumes:
+      - ./data/files:/data/data
+    depends_on:
+      - postgres

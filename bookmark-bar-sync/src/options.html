@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bookmark Bar Sync</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+<main>
+  <h1>Bookmark Bar Sync</h1>
+  <p class="lead">Keeps this browser's bookmarks bar the same as one collection in your Linkwarden.</p>
+
+  <section id="status-box" hidden>
+    <h2>Status</h2>
+    <p id="status-line"></p>
+    <p id="error-line" class="error" hidden></p>
+    <div id="blocked-box" class="warn" hidden>
+      <p id="blocked-text"></p>
+      <button id="force">Apply anyway</button>
+    </div>
+    <div class="row">
+      <button id="sync">Sync now</button>
+      <button id="disconnect" class="secondary">Stop syncing this browser</button>
+    </div>
+    <details id="warnings-box" hidden><summary>Recent warnings</summary><ul id="warnings"></ul></details>
+  </section>
+
+  <section>
+    <h2>Connection</h2>
+    <label>Linkwarden address<input id="url" type="url" placeholder="https://links.tobyw87.com"></label>
+    <label>Linkwarden access token <small>(Linkwarden → Settings → Access Tokens)</small><input id="token" type="password" autocomplete="off"></label>
+    <label>Cloudflare Access client ID <small>(leave empty if Linkwarden isn't behind Cloudflare Access)</small><input id="cfId" autocomplete="off"></label>
+    <label>Cloudflare Access client secret<input id="cfSecret" type="password" autocomplete="off"></label>
+    <label>Collection to use for the bar<input id="collectionName" placeholder="Bookmarks Bar"></label>
+    <label>Check Linkwarden for changes every (minutes)<input id="intervalMin" type="number" min="1" max="60"></label>
+    <div class="row">
+      <button id="save">Save and test connection</button>
+      <span id="test-result"></span>
+    </div>
+  </section>
+
+  <section id="setup-box" hidden>
+    <h2>Start syncing</h2>
+    <p><b>First computer:</b> sends everything on this bar to Linkwarden.</p>
+    <button id="upload">Upload this bar to Linkwarden</button>
+    <p><b>Other computers:</b> moves what's on this bar now into a backup folder in Other Bookmarks, then fills the bar from Linkwarden.</p>
+    <button id="replace">Replace this bar with Linkwarden</button>
+    <p class="note">Turn off the browser's own bookmark sync first (Firefox Sync → Bookmarks, or Chrome sync → Bookmarks), or the two will fight.</p>
+  </section>
+</main>
+<script src="options.js"></script>
+</body>
+</html>
