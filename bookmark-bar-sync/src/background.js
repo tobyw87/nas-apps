@@ -15,7 +15,7 @@ const ACTION = B.action ?? B.browserAction;
 const IS_FIREFOX = B.runtime.getURL('').startsWith('moz-extension:');
 
 const DEFAULTS = {
-  url: '',
+  url: '__HOST__',
   token: '',
   cfId: '',
   cfSecret: '',

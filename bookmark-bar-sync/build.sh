@@ -8,7 +8,8 @@ HOST="${HOST%/}"
 cd "$(dirname "$0")"
 rm -rf dist && mkdir -p dist/chrome dist/firefox
 for b in chrome firefox; do
-  cp src/background.js src/options.html src/options.js src/options.css dist/$b/
+  sed "s#__HOST__#$HOST#g" src/background.js > dist/$b/background.js
+  cp src/options.html src/options.js src/options.css dist/$b/
   cp -r src/icons dist/$b/
   sed "s#__HOST__#$HOST#g" src/manifest.$b.json > dist/$b/manifest.json
   (cd dist/$b && zip -qr ../bookmark-bar-sync-$b.zip .)
