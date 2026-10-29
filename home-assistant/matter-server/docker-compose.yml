@@ -1,0 +1,13 @@
+# Matter Server for Home Assistant (Container install, no add-on store).
+# HA's Matter integration connects to ws://localhost:5580/ws.
+# Install on the NAS in /volume1/docker/matter-server, then: sudo docker compose up -d
+services:
+  matter-server:
+    image: ghcr.io/home-assistant-libs/python-matter-server:stable
+    container_name: matter-server
+    restart: unless-stopped
+    network_mode: host          # Matter needs the LAN directly (mDNS + IPv6)
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - ./data:/data            # pairing state - keep it
