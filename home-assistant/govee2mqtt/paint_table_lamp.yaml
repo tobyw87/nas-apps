@@ -40,10 +40,12 @@ sequence:
   - repeat:
       for_each: "{{ range(1, 17) | list }}"
       sequence:
-        - variables:
-            hexc: "{{ cols[(repeat.item - 1) % (cols | length)] | replace('#', '') }}"
+        # Hex is parsed inside one template on purpose: a script variable like "663300"
+        # would be turned into the number 663300 by Home Assistant.
         - action: light.turn_on
           target:
             entity_id: "{{ 'light.table_lamp_segment_%03d' % repeat.item }}"
           data:
-            rgb_color: "{{ [hexc[0:2] | int(0, 16), hexc[2:4] | int(0, 16), hexc[4:6] | int(0, 16)] }}"
+            rgb_color: >-
+              {%- set h = cols[(repeat.item - 1) % (cols | length)] | string | replace('#', '') -%}
+              {{ [h[0:2] | int(0, 16), h[2:4] | int(0, 16), h[4:6] | int(0, 16)] }}
