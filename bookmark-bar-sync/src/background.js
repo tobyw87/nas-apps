@@ -24,6 +24,7 @@ const DEFAULTS = {
 };
 const ORDER_RE = /\s*\[bookmark-bar-sync order:[^\]]*\]\s*/g;
 const DESC_MAX = 2048;
+const FETCH_TIMEOUT_MS = 30000;
 // Pulls that would delete more than this many bookmarks, and more than half of them, wait for a click.
 const SAFETY_MIN_DELETES = 10;
 
@@ -131,10 +132,23 @@ async function inBar(folderId) {
   return false;
 }
 
-// While a pull is rearranging the bar, ignore the bookmark events it causes. (Any echo that slips
-// through afterwards is harmless: it compares with Linkwarden, finds nothing to change, and stops.)
+// While a pull is rearranging the bar, bookmark events are held back. Afterwards, events for bookmarks
+// the pull itself touched are dropped (they're its own edits); the rest are the user's and get replayed.
 let applying = 0;
-const ignoring = () => applying > 0;
+let deferred = [];
+const touchedIds = new Set();
+function touched(id) { touchedIds.add(id); }
+function beginApply() {
+  if (applying++ === 0) { touchedIds.clear(); deferred = []; }
+}
+async function endApply() {
+  await sleep(300); // let events from our own edits arrive first
+  if (--applying > 0) return;
+  const list = deferred;
+  deferred = [];
+  for (const d of list) if (!touchedIds.has(d.id)) runLocalEvent(d.handler);
+  touchedIds.clear();
+}
 
 // ---------------------------------------------------------------- Linkwarden API
 
@@ -148,13 +162,18 @@ async function lw(method, path, body) {
     headers['CF-Access-Client-Secret'] = c.cfSecret.trim();
   }
   let res;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS); // a hung request must never block later syncs
   try {
     res = await fetch(c.url.trim().replace(/\/+$/, '') + path, {
-      method, headers, credentials: 'omit', cache: 'no-store', redirect: 'manual',
+      method, headers, credentials: 'omit', cache: 'no-store', redirect: 'manual', signal: ctrl.signal,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (e) {
-    throw new SyncError(`Can't reach Linkwarden (${e.message}).`, { retry: true });
+    const why = e.name === 'AbortError' ? 'no answer after 30 seconds' : e.message;
+    throw new SyncError(`Can't reach Linkwarden (${why}).`, { retry: true });
+  } finally {
+    clearTimeout(timer);
   }
   const ct = res.headers.get('content-type') || '';
   if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400) || (!ct.includes('json') && res.status < 500)) {
@@ -416,6 +435,7 @@ async function applyFolder(localId, rnode, ctx) {
       if (!rc.folder) props.url = rc.url;
       try {
         ln = await B.bookmarks.create(props);
+        touched(ln.id);
       } catch (e) {
         addWarning(`Couldn't add "${rc.title}" to the bar: ${e.message}`);
         continue;
@@ -427,12 +447,14 @@ async function applyFolder(localId, rnode, ctx) {
     } else {
       const here = await B.bookmarks.getChildren(localId);
       if (here[i]?.id !== ln.id) {
+        touched(ln.id);
         await B.bookmarks.move(ln.id, { parentId: localId, index: i });
         ctx.changes++;
       }
       const titleDiff = normTitle(ln.title) !== normTitle(rc.title);
       const urlDiff = !rc.folder && normUrl(ln.url) !== normUrl(rc.url);
       if (titleDiff || urlDiff) {
+        touched(ln.id);
         try {
           await B.bookmarks.update(ln.id, rc.folder ? { title: rc.title } : { title: rc.title, url: rc.url });
           ctx.changes++;
@@ -448,9 +470,10 @@ async function applyFolder(localId, rnode, ctx) {
   for (const k of rest) {
     const key = S.map[k.id];
     if (key && !ctx.nodes.has(key)) {
+      const sub = (await B.bookmarks.getSubTree(k.id).catch(() => [k]))[0];
+      (function mark(n) { touched(n.id); delete S.map[n.id]; (n.children || []).forEach(mark); })(sub);
       if (isFolder(k)) await B.bookmarks.removeTree(k.id);
       else await B.bookmarks.remove(k.id);
-      delete S.map[k.id];
       ctx.changes++;
     } else if (!key && syncable(k) && !S.skip[k.id]) {
       ctx.upload.push(k.id);
@@ -484,13 +507,12 @@ async function pull({ force = false } = {}) {
     nodes, changes: 0, upload: [],
     byKey: new Map(Object.entries(S.map).map(([lid, key]) => [key, lid])),
   };
-  applying++;
+  beginApply();
   try {
     await applyFolder(bar, tree, ctx);
   } finally {
     await save('map');
-    await sleep(300); // let the bookmark events from our own edits arrive and be ignored
-    applying--;
+    await endApply();
   }
   // Forget mappings for bookmarks that no longer exist anywhere.
   for (const [lid, key] of Object.entries(S.map)) {
@@ -541,14 +563,17 @@ async function scheduleAlarm() {
 
 // ---------------------------------------------------------------- browser events
 
-function onLocalEvent(id, handler) {
-  if (ignoring(id)) return;
+function runLocalEvent(handler) {
   locked(async () => {
     await ensureLoaded();
     if (!S.setupDone) return;
     await handler();
     await save('queue');
   }).then(kick, (e) => console.error('bookmark-bar-sync', e));
+}
+function onLocalEvent(id, handler) {
+  if (applying > 0) deferred.push({ id, handler });
+  else runLocalEvent(handler);
 }
 
 function topMappedKeys(node) {
@@ -600,6 +625,27 @@ if (B.bookmarks.onChildrenReordered) {
 }
 
 B.alarms.onAlarm.addListener((a) => { if (a.name === 'sync') locked(() => syncNow()); });
+
+// Backup for the alarm: Firefox's alarms can stop firing (e.g. after the computer sleeps), so also
+// sync whenever a check finds the last sync is overdue, and put the alarm back if it's gone.
+let overdueQueued = false;
+async function syncIfOverdue() {
+  if (overdueQueued) return;
+  await ensureLoaded();
+  if (!S.setupDone) return;
+  const every = Math.max(1, Number(S.config.intervalMin) || 2) * 60000;
+  const last = Math.max(S.status.lastSync || 0, S.status.lastAttempt || 0);
+  if (Date.now() - last < every + 15000) return;
+  if (!(await B.alarms.get('sync'))) await scheduleAlarm();
+  overdueQueued = true;
+  locked(() => syncNow()).finally(() => { overdueQueued = false; });
+}
+setInterval(() => { syncIfOverdue().catch(() => {}); }, 60000);
+if (B.windows && B.windows.onFocusChanged) {
+  B.windows.onFocusChanged.addListener((id) => {
+    if (id !== B.windows.WINDOW_ID_NONE) syncIfOverdue().catch(() => {});
+  });
+}
 B.runtime.onStartup.addListener(() => { scheduleAlarm(); });
 B.runtime.onInstalled.addListener(() => { scheduleAlarm(); });
 ACTION.onClicked.addListener(() => B.runtime.openOptionsPage());
@@ -627,14 +673,13 @@ async function cmdSetup(mode) {
     if (!root) throw new SyncError(`There's no "${S.config.collectionName}" collection in Linkwarden yet. Use "Upload this bar" on your first computer.`);
     const kids = await B.bookmarks.getChildren(bar);
     if (kids.length) {
-      applying++;
+      beginApply();
       try {
         const day = new Date().toISOString().slice(0, 10);
         const backup = await B.bookmarks.create({ parentId: await otherBookmarksId(), title: `Bookmarks bar backup ${day}` });
-        for (const k of kids) await B.bookmarks.move(k.id, { parentId: backup.id });
+        for (const k of kids) { touched(k.id); await B.bookmarks.move(k.id, { parentId: backup.id }); }
       } finally {
-        await sleep(300);
-        applying--;
+        await endApply();
       }
     }
   } else if (!root) {
@@ -692,4 +737,4 @@ B.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // Exposed for tests.
-globalThis.__bbs = { ensureLoaded, syncNow: () => locked(() => syncNow()), state: () => S, barId };
+globalThis.__bbs = { syncIfOverdue, ensureLoaded, syncNow: () => locked(() => syncNow()), state: () => S, barId };

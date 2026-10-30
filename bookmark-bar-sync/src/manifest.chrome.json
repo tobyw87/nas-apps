@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bookmark Bar Sync",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Keeps the bookmarks bar in sync with a Linkwarden collection.",
   "permissions": ["bookmarks", "storage", "alarms"],
   "host_permissions": ["__HOST__/*"],
