@@ -24,6 +24,11 @@ h1{margin:0;font-size:4.2vh;font-weight:600}
 .status.heat{color:var(--heat)}.status.cool{color:var(--cool)}.status.off{color:var(--muted)}
 .next{font-size:2.5vh;color:var(--muted);margin-top:.8vh}
 .err{color:var(--warn);font-size:2.6vh}
+/* embedded in the Pi kiosk: its own title bar and clock are shown, so hide ours and use its colours */
+.embed{--bg:#0b0d10;--panel:#14181d;--line:#262c34;--muted:#8b95a1}
+.embed h1,.embed .clock{display:none!important}
+.embed header{justify-content:flex-end}
+.embed .wrap{padding:2vh 2.5vw 2.5vh}
 .right{display:flex;align-items:baseline;gap:2.5vw}
 .outside{font-size:3.6vh;color:var(--text)}
 .outside span{color:var(--muted);font-size:2.8vh;margin-left:.6vw}
@@ -36,6 +41,7 @@ h1{margin:0;font-size:4.2vh;font-weight:600}
   <div class="err" id="err"></div>
 </div>
 <script>
+if (new URLSearchParams(location.search).has('embed')) document.documentElement.classList.add('embed');
 const r1 = (v) => v == null ? '–' : Math.round(v);
 function fmtTime(iso) { return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
 function tickClock() { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
