@@ -5,66 +5,142 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Thermostat</title>
 <style>
-:root{--bg:#14110f;--panel:#1e1a17;--line:#3a332d;--text:#f3ece4;--muted:#a69a8e;--heat:#ff8a3d;--cool:#5ab4ff;--warn:#f2c14e}
-*{box-sizing:border-box}
-html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;cursor:none}
-.wrap{height:100%;display:flex;flex-direction:column;padding:3.5vh 3.5vw;gap:3vh}
-header{display:flex;justify-content:space-between;align-items:baseline}
-h1{margin:0;font-size:4.2vh;font-weight:600}
-.clock{font-size:4.2vh;color:var(--muted);font-variant-numeric:tabular-nums}
-.away{font-size:2.6vh;color:var(--warn);margin-left:1.5vw}
-.rooms{flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:2.5vw}
-@media (orientation:portrait){.rooms{grid-template-columns:1fr}}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:3vh;padding:4vh 2.5vw;display:flex;flex-direction:column;justify-content:space-between}
-.name{font-size:3.6vh;color:var(--muted);font-weight:500}
-.temp{font-size:17vh;font-weight:200;line-height:1;letter-spacing:-.4vh}
-.temp small{font-size:5vh;color:var(--muted);letter-spacing:0}
-.hum{font-size:3.6vh;color:var(--muted)}
-.status{font-size:3.2vh;font-weight:600}
-.status.heat{color:var(--heat)}.status.cool{color:var(--cool)}.status.off{color:var(--muted)}
-.next{font-size:2.5vh;color:var(--muted);margin-top:.8vh}
-.err{color:var(--warn);font-size:2.6vh}
+:root{--bg:#14110f;--panel:#1e1a17;--panel2:#27221e;--line:#3a332d;--text:#f3ece4;--muted:#a69a8e;--heat:#ff8a3d;--heat-soft:#ff8a3d26;--cool:#5ab4ff;--cool-soft:#5ab4ff26;--warn:#f2c14e}
 /* embedded in the Pi kiosk: its own title bar and clock are shown, so hide ours and use its colours */
-.embed{--bg:#0b0d10;--panel:#14181d;--line:#262c34;--muted:#8b95a1}
-.embed h1,.embed .clock{display:none!important}
-.embed header{justify-content:flex-end}
+.embed{--bg:#0b0d10;--panel:#14181d;--panel2:#1b2027;--line:#262c34;--muted:#8b95a1}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none}
+html:not(.ctl) body{cursor:none}
+.wrap{height:100%;display:flex;flex-direction:column;padding:3.5vh 3.5vw;gap:2.5vh}
 .embed .wrap{padding:2vh 2.5vw 2.5vh}
-.right{display:flex;align-items:baseline;gap:2.5vw}
-.outside{font-size:3.6vh;color:var(--text)}
+header{display:flex;justify-content:space-between;align-items:center;gap:2vw}
+h1{margin:0;font-size:4.2vh;font-weight:600}
+.embed h1,.embed .clock{display:none!important}
+.left{display:flex;align-items:baseline;gap:1.5vw}
+.away{font-size:2.6vh;color:var(--warn)}
+.right{display:flex;align-items:center;gap:2.5vw}
+.clock{font-size:4.2vh;color:var(--muted);font-variant-numeric:tabular-nums}
+.outside{font-size:3.6vh}
 .outside span{color:var(--muted);font-size:2.8vh;margin-left:.6vw}
+.sched-btn{display:none;font:inherit;font-size:2.6vh;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:1vh 2vw;cursor:pointer}
+.ctl .sched-btn{display:inline-block}
+.rooms{flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:2.5vw;min-height:0}
+@media (orientation:portrait){.rooms{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:3vh;padding:3.5vh 2.2vw;display:flex;flex-direction:column;justify-content:space-between;min-height:0}
+.name{font-size:3.4vh;color:var(--muted);font-weight:500}
+.temp{font-size:15vh;font-weight:200;line-height:1;letter-spacing:-.4vh}
+.ctl .temp{font-size:12vh}
+.temp small{font-size:5vh;color:var(--muted);letter-spacing:0}
+.hum{font-size:3.2vh;color:var(--muted);margin-top:.5vh}
+.status{font-size:3vh;font-weight:600}
+.status.heat{color:var(--heat)}.status.cool{color:var(--cool)}.status.off{color:var(--muted)}
+.next{font-size:2.3vh;color:var(--muted);margin-top:.6vh}
+.manual{color:var(--warn)}
+.controls{display:none;align-items:center;justify-content:space-between;gap:1vw;margin-top:1.6vh;background:var(--panel2);border-radius:2.4vh;padding:1vh}
+.ctl .controls{display:flex}
+.step{display:flex;align-items:center;gap:.6vw}
+.btn{width:8vh;height:8vh;border-radius:50%;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:4.5vh;line-height:1;display:grid;place-items:center;cursor:pointer;padding:0}
+.btn:active{transform:scale(.94);background:var(--line)}
+.tgt{min-width:9vh;text-align:center;font-size:4.4vh;font-weight:500}
+.tgt.pending{color:var(--heat)}
+.seg{display:flex;background:var(--panel);border-radius:1.6vh;padding:.5vh;gap:.3vh}
+.seg button{font:inherit;font-size:2.5vh;border:0;background:none;color:var(--muted);padding:1.6vh 1.2vw;border-radius:1.2vh;cursor:pointer}
+.seg button.on{background:var(--heat-soft);color:var(--heat);font-weight:700}
+.seg button.on.cool{background:var(--cool-soft);color:var(--cool)}
+.seg button.on.off{background:var(--line);color:var(--text)}
+.err{color:var(--warn);font-size:2.4vh;min-height:2.4vh}
+.toast{position:fixed;left:50%;bottom:4vh;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);padding:1.4vh 2.4vw;border-radius:1.6vh;font-size:2.6vh;opacity:0;transition:.2s;pointer-events:none}
+.toast.show{opacity:1}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header><div><h1 style="display:inline">Thermostat</h1><span class="away" id="away"></span></div><div class="right"><div class="outside" id="outside"></div><div class="clock" id="clock"></div></div></header>
+  <header>
+    <div class="left"><h1>Thermostat</h1><span class="away" id="away"></span></div>
+    <div class="right"><div class="outside" id="outside"></div><button class="sched-btn" id="sched">Schedule ›</button><div class="clock" id="clock"></div></div>
+  </header>
   <div class="rooms" id="rooms"></div>
   <div class="err" id="err"></div>
 </div>
+<div class="toast" id="toast"></div>
 <script>
-if (new URLSearchParams(location.search).has('embed')) document.documentElement.classList.add('embed');
+const EMBED = new URLSearchParams(location.search).has('embed');
+if (EMBED) document.documentElement.classList.add('embed');
+const $ = (id) => document.getElementById(id);
 const r1 = (v) => v == null ? '–' : Math.round(v);
-function fmtTime(iso) { return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
-function tickClock() { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
-async function load() {
-  try {
-    const s = await (await fetch('/api/state', { cache: 'no-store' })).json();
-    document.getElementById('err').textContent = s.ok ? '' : 'Home Assistant not responding';
-    document.getElementById('away').textContent = s.home === false ? '• Away' : '';
-    document.getElementById('outside').innerHTML = s.outdoor
-      ? `Outside ${Math.round(s.outdoor.temp)}°F<span>${s.outdoor.condition}${s.outdoor.humidity != null ? ' · ' + Math.round(s.outdoor.humidity) + '%' : ''}</span>` : '';
-    document.getElementById('rooms').innerHTML = s.rooms.map((r) => {
-      const c = r.current, off = c.hvac === 'off' || !c.available;
-      const cls = off ? 'off' : (c.hvac === 'cool' ? 'cool' : 'heat');
-      const st = !c.available ? 'Unavailable' : off ? 'Off' : (cls === 'cool' ? 'Cooling to ' : 'Heating to ') + c.target + '°';
-      const nx = r.next ? `${r.next.desired && r.next.desired.hvac !== 'off' ? r.next.desired.temp + '°' : 'Off'} at ${fmtTime(r.next.at)}` : '';
-      return `<div class="card"><div class="name">${r.name}</div>
-        <div><div class="temp">${r1(c.temp)}<small>°F</small></div><div class="hum">${c.humidity == null ? '' : '💧 ' + Math.round(c.humidity) + '% humidity'}</div></div>
-        <div><div class="status ${cls}">${st}</div><div class="next">${nx ? 'Next: ' + nx : ''}</div></div></div>`;
-    }).join('');
-  } catch (e) { document.getElementById('err').textContent = 'Thermostat server not responding'; }
+const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+let S = null; const pending = {};
+
+// tell the kiosk around us that someone is using the screen (holds the slideshow), and pass on sideways swipes
+const tellKiosk = (msg) => { if (EMBED && parent !== window) parent.postMessage({ thermostat: msg }, '*'); };
+let sx = 0, sy = 0, st = 0;
+document.addEventListener('pointerdown', (e) => { sx = e.clientX; sy = e.clientY; st = Date.now(); if (S && S.canControl) tellKiosk('touch'); });
+document.addEventListener('pointerup', (e) => {
+  const dx = e.clientX - sx, dy = e.clientY - sy;
+  if (Date.now() - st < 1200 && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.4) tellKiosk(dx < 0 ? 'next' : 'back');
+});
+
+function toast(m) { const t = $('toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2000); }
+function tickClock() { $('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+
+async function api(method, url, body) {
+  const r = await fetch(url, { method, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
 }
+async function load() {
+  try { S = await api('GET', '/api/state'); render(); }
+  catch (e) { $('err').textContent = 'Thermostat server not responding'; }
+}
+function render() {
+  document.documentElement.classList.toggle('ctl', !!S.canControl);
+  $('err').textContent = S.ok ? '' : 'Home Assistant not responding';
+  $('away').textContent = S.home === false ? '• Away' : '';
+  $('outside').innerHTML = S.outdoor ? `Outside ${Math.round(S.outdoor.temp)}°F<span>${S.outdoor.condition}${S.outdoor.humidity != null ? ' · ' + Math.round(S.outdoor.humidity) + '%' : ''}</span>` : '';
+  $('rooms').innerHTML = S.rooms.map((r) => {
+    const c = r.current, off = c.hvac === 'off' || !c.available;
+    const cls = off ? 'off' : (c.hvac === 'cool' ? 'cool' : 'heat');
+    const p = pending[r.id];
+    const tgt = p ? p.temp : c.target;
+    const st = !c.available ? 'Unavailable' : off ? 'Off' : (cls === 'cool' ? 'Cooling to ' : 'Heating to ') + tgt + '°';
+    const manual = r.scheduled && ((r.scheduled.hvac === 'off') !== (c.hvac === 'off') || (c.hvac !== 'off' && c.target != null && r.scheduled.temp !== c.target));
+    const nx = r.next ? `${r.next.desired && r.next.desired.hvac !== 'off' ? r.next.desired.temp + '°' : 'Off'} at ${fmtTime(r.next.at)}` : '';
+    const nextLine = manual && r.next ? `<div class="next manual">Manual · schedule resumes ${fmtTime(r.next.at)}</div>` : nx ? `<div class="next">Next: ${nx}</div>` : '';
+    return `<div class="card" data-id="${r.id}"><div class="name">${r.name}</div>
+      <div><div class="temp">${r1(c.temp)}<small>°F</small></div><div class="hum">${c.humidity == null ? '' : '💧 ' + Math.round(c.humidity) + '% humidity'}</div></div>
+      <div><div class="status ${cls}">${st}</div>${nextLine}
+        <div class="controls">
+          <div class="step"><button class="btn" data-step="-1" aria-label="Lower">−</button>
+            <div class="tgt ${p ? 'pending' : ''}">${off && !p ? '–' : (tgt ?? '–') + '°'}</div>
+            <button class="btn" data-step="1" aria-label="Raise">+</button></div>
+          <div class="seg"><button data-hvac="${S.mode}" class="${off ? '' : 'on ' + cls}">${S.mode === 'cool' ? 'Cool' : 'Heat'}</button><button data-hvac="off" class="${off ? 'on off' : ''}">Off</button></div>
+        </div></div></div>`;
+  }).join('');
+}
+document.addEventListener('click', async (e) => {
+  const card = e.target.closest('.card'); if (!card || !S || !S.canControl) return;
+  const r = S.rooms.find((x) => x.id === card.dataset.id);
+  const stepBtn = e.target.closest('[data-step]'), hvacBtn = e.target.closest('[data-hvac]');
+  if (stepBtn) {
+    const base = pending[r.id]?.temp ?? r.current.target ?? (r.scheduled?.temp || 70);
+    const t = Math.max(61, Math.min(86, base + Number(stepBtn.dataset.step)));
+    clearTimeout(pending[r.id]?.timer);
+    pending[r.id] = { temp: t, timer: setTimeout(() => commit(r, { temp: t, hvac: r.current.hvac === 'cool' ? 'cool' : S.mode }), 1200) };
+    render();
+  } else if (hvacBtn) {
+    const h = hvacBtn.dataset.hvac;
+    await commit(r, h === 'off' ? { hvac: 'off' } : { hvac: h, temp: r.current.target || r.scheduled?.temp || 70 });
+  }
+});
+async function commit(r, body) {
+  try { const s = await api('POST', '/api/room/' + r.id, body); delete pending[r.id]; S = s; render();
+        toast(body.hvac === 'off' ? `${r.name} off` : `${r.name} set to ${body.temp}°`); }
+  catch (e) { delete pending[r.id]; render(); toast('Failed: ' + e.message); }
+}
+$('sched').onclick = () => { location.href = '/' + (EMBED ? '?embed=1' : '') + '#schedule'; };
 tickClock(); setInterval(tickClock, 10000);
-load(); setInterval(load, 20000);
+load(); setInterval(() => { if (!Object.keys(pending).length) load(); }, 20000);
 </script>
 </body>
 </html>

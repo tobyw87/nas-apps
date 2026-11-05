@@ -161,8 +161,25 @@ function homeState() {
   return Number.isFinite(n) ? n > 0 : null;
 }
 const KEYWORDS = { office: ['office'], living: ['living'], bedroom: ['bedroom'] };
+// Humidity sensors: the humidity entity in the room's Home Assistant area (looked up every 10 min),
+// else one whose name contains the room name.
+let areaHumidity = {}; let areaLookupAt = 0;
+async function lookupAreaHumidity() {
+  if (Date.now() - areaLookupAt < 600000) return;
+  areaLookupAt = Date.now();
+  const parts = config.rooms.map((r) => `${JSON.stringify(r.id)}: (area_entities(${JSON.stringify(r.name)}) | select('match', 'sensor\\.') | select('is_state_attr', 'device_class', 'humidity') | list)`);
+  try {
+    const res = await fetch(HA_URL + '/api/template', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + HA_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template: `{{ { ${parts.join(', ')} } | tojson }}` }), signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) areaHumidity = JSON.parse(await res.text());
+  } catch (e) { console.error('Area humidity lookup failed:', e.message); }
+}
 function findHumidity(room) {
   if (room.humiditySensor) return room.humiditySensor;
+  const inArea = (areaHumidity[room.id] || []).filter((id) => states[id]);
+  if (inArea.length) return inArea.sort((a, b) => b.includes('calibrated') - a.includes('calibrated'))[0];
   const words = KEYWORDS[room.id] || [room.id];
   const cands = Object.values(states).filter((s) => s.entity_id.startsWith('sensor.') &&
     (s.attributes.device_class === 'humidity' || s.entity_id.includes('humidity')) &&
@@ -189,6 +206,7 @@ async function tick() {
   try {
     await poll();
     if (haError) return;
+    await lookupAreaHumidity();
     const home = homeState();
     for (const room of config.rooms) {
       const d = desiredFor(room, new Date(), home);
@@ -268,28 +286,32 @@ function readBody(req) {
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
                 '.svg': 'image/svg+xml', '.json': 'application/json' };
 
-// Requests from the LAN (e.g. the Pi kiosk) are read-only: they can see the kiosk view and the
-// status data, but not change temperatures or the schedule. Full control comes through
-// "tailscale serve", which connects from 127.0.0.1.
-const isLocal = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+// Requests from the LAN are read-only (kiosk view and status data), except from the devices in
+// CONTROL_IPS (the Pi kiosk's touchscreen). Full control also comes through "tailscale serve",
+// which connects from 127.0.0.1.
+const CONTROL_IPS = (process.env.CONTROL_IPS || '').split(',').map((x) => x.trim()).filter(Boolean);
+const ipOf = (req) => (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+const canControl = (req) => ['127.0.0.1', '::1'].includes(ipOf(req)) || CONTROL_IPS.includes(ipOf(req));
 const LAN_OK = new Set(['/kiosk', '/kiosk.html', '/api/state', '/healthz']);
+
+const viewFor = (req) => ({ ...stateView(), canControl: canControl(req) });
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
-  if (!isLocal(req) && !(req.method === 'GET' && LAN_OK.has(url.pathname))) {
+  if (!canControl(req) && !(req.method === 'GET' && LAN_OK.has(url.pathname))) {
     res.writeHead(url.pathname === '/' ? 302 : 403, url.pathname === '/' ? { Location: '/kiosk' } : {});
     return res.end(url.pathname === '/' ? '' : 'Read-only on the home network. Use the Tailscale address to make changes.');
   }
   try {
     if (url.pathname === '/api/state' && req.method === 'GET') {
       if (Date.now() - lastPoll > 5000) await poll();
-      return send(res, 200, stateView());
+      return send(res, 200, viewFor(req));
     }
     if (url.pathname === '/api/config' && req.method === 'PUT') {
       const c = validate(await readBody(req));
       config = c; saveConfig(c); configVersion++;
       tick(); // sends only to rooms whose scheduled setting changed
-      return send(res, 200, stateView());
+      return send(res, 200, viewFor(req));
     }
     const m = url.pathname.match(/^\/api\/room\/([\w-]+)$/);
     if (m && req.method === 'POST') {
@@ -303,7 +325,7 @@ http.createServer(async (req, res) => {
         await sendToRoom(room, { hvac, temp });
       }
       await poll();
-      return send(res, 200, stateView());
+      return send(res, 200, viewFor(req));
     }
     if (url.pathname === '/healthz') return send(res, 200, { ok: !haError });
     // static files

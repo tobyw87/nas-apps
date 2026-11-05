@@ -12,6 +12,12 @@
   --accent:var(--heat); --accent-soft:var(--heat-soft);
 }
 body.cool{--accent:var(--cool);--accent-soft:var(--cool-soft)}
+/* inside the Pi kiosk: kiosk colours, a Back button, and room for fingers */
+.embed{--bg:#0b0d10;--panel:#14181d;--panel2:#1b2027;--line:#262c34;--muted:#8b95a1}
+.back{display:none;border:0;background:var(--panel2);border-radius:999px;padding:8px 16px;font-size:16px;cursor:pointer}
+.embed .back{display:inline-block}
+.embed #conn{display:none}
+.embed .wrap{padding-top:10px}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 button,input,select{font:inherit;color:inherit}
@@ -83,6 +89,7 @@ input[type=number]{width:70px}
 <body>
 <div class="wrap">
   <header>
+    <button class="back" id="back">‹ Back</button>
     <h1>Thermostat</h1>
     <span class="pill hidden" id="outdoor">☁️ Outside <b></b></span>
     <span class="pill" id="presence"><span class="dot"></span><b>…</b></span>
@@ -307,6 +314,14 @@ document.querySelectorAll('.tabs button').forEach((b) => b.onclick = () => {
   $('#rooms').classList.toggle('hidden', b.dataset.tab !== 'rooms');
   $('#schedule').classList.toggle('hidden', b.dataset.tab !== 'schedule');
 });
+const EMBED = new URLSearchParams(location.search).has('embed');
+if (EMBED) {
+  document.documentElement.classList.add('embed');
+  // holds the kiosk slideshow while you're using this page
+  document.addEventListener('pointerdown', () => parent !== window && parent.postMessage({ thermostat: 'touch' }, '*'));
+  $('#back').onclick = () => { location.href = '/kiosk?embed=1'; };
+}
+if (location.hash === '#schedule') document.querySelector('.tabs [data-tab=schedule]').click();
 refresh(); setInterval(() => { if (!Object.keys(pending).length) refresh(); }, 15000);
 </script>
 </body>
