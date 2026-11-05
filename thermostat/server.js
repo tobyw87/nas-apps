@@ -268,8 +268,18 @@ function readBody(req) {
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
                 '.svg': 'image/svg+xml', '.json': 'application/json' };
 
+// Requests from the LAN (e.g. the Pi kiosk) are read-only: they can see the kiosk view and the
+// status data, but not change temperatures or the schedule. Full control comes through
+// "tailscale serve", which connects from 127.0.0.1.
+const isLocal = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+const LAN_OK = new Set(['/kiosk', '/kiosk.html', '/api/state', '/healthz']);
+
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
+  if (!isLocal(req) && !(req.method === 'GET' && LAN_OK.has(url.pathname))) {
+    res.writeHead(url.pathname === '/' ? 302 : 403, url.pathname === '/' ? { Location: '/kiosk' } : {});
+    return res.end(url.pathname === '/' ? '' : 'Read-only on the home network. Use the Tailscale address to make changes.');
+  }
   try {
     if (url.pathname === '/api/state' && req.method === 'GET') {
       if (Date.now() - lastPoll > 5000) await poll();
