@@ -24,11 +24,14 @@ h1{margin:0;font-size:4.2vh;font-weight:600}
 .status.heat{color:var(--heat)}.status.cool{color:var(--cool)}.status.off{color:var(--muted)}
 .next{font-size:2.5vh;color:var(--muted);margin-top:.8vh}
 .err{color:var(--warn);font-size:2.6vh}
+.right{display:flex;align-items:baseline;gap:2.5vw}
+.outside{font-size:3.6vh;color:var(--text)}
+.outside span{color:var(--muted);font-size:2.8vh;margin-left:.6vw}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header><div><h1 style="display:inline">Thermostat</h1><span class="away" id="away"></span></div><div class="clock" id="clock"></div></header>
+  <header><div><h1 style="display:inline">Thermostat</h1><span class="away" id="away"></span></div><div class="right"><div class="outside" id="outside"></div><div class="clock" id="clock"></div></div></header>
   <div class="rooms" id="rooms"></div>
   <div class="err" id="err"></div>
 </div>
@@ -41,6 +44,8 @@ async function load() {
     const s = await (await fetch('/api/state', { cache: 'no-store' })).json();
     document.getElementById('err').textContent = s.ok ? '' : 'Home Assistant not responding';
     document.getElementById('away').textContent = s.home === false ? '• Away' : '';
+    document.getElementById('outside').innerHTML = s.outdoor
+      ? `Outside ${Math.round(s.outdoor.temp)}°F<span>${s.outdoor.condition}${s.outdoor.humidity != null ? ' · ' + Math.round(s.outdoor.humidity) + '%' : ''}</span>` : '';
     document.getElementById('rooms').innerHTML = s.rooms.map((r) => {
       const c = r.current, off = c.hvac === 'off' || !c.available;
       const cls = off ? 'off' : (c.hvac === 'cool' ? 'cool' : 'heat');

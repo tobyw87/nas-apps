@@ -84,6 +84,7 @@ input[type=number]{width:70px}
 <div class="wrap">
   <header>
     <h1>Thermostat</h1>
+    <span class="pill hidden" id="outdoor">☁️ Outside <b></b></span>
     <span class="pill" id="presence"><span class="dot"></span><b>…</b></span>
     <span class="pill" id="conn"><span class="dot"></span>Home Assistant</span>
   </header>
@@ -153,6 +154,12 @@ function showErr(m) { const e = $('#err'); e.textContent = m || ''; e.classList.
 
 function render() {
   document.body.classList.toggle('cool', state.mode === 'cool');
+  const o = $('#outdoor');
+  o.classList.toggle('hidden', !state.outdoor);
+  if (state.outdoor) {
+    o.firstChild.textContent = weatherIcon(state.outdoor.condition) + ' Outside ';
+    o.querySelector('b').textContent = Math.round(state.outdoor.temp) + '° · ' + state.outdoor.condition;
+  }
   const p = $('#presence');
   p.querySelector('.dot').className = 'dot ' + (state.home === false ? 'warn' : state.home ? 'ok' : '');
   p.querySelector('b').textContent = state.home === false ? 'Away' : state.home ? 'Home' : 'Presence unknown';
@@ -160,6 +167,17 @@ function render() {
   showErr(state.ok ? '' : 'Home Assistant error: ' + state.error);
   renderRooms();
   if (!dirty) { draft = JSON.parse(JSON.stringify({ scheduleEnabled: state.scheduleEnabled, mode: state.mode, away: state.away, rooms: state.rooms.map(stripRoom) })); renderSchedule(); }
+}
+function weatherIcon(c) {
+  c = (c || '').toLowerCase();
+  if (c.includes('sunny') || c.includes('clear')) return c.includes('night') ? '🌙' : '☀️';
+  if (c.includes('partly')) return '⛅';
+  if (c.includes('snow')) return '❄️';
+  if (c.includes('rain') || c.includes('pour')) return '🌧️';
+  if (c.includes('lightning')) return '⛈️';
+  if (c.includes('fog')) return '🌫️';
+  if (c.includes('wind')) return '💨';
+  return '☁️';
 }
 function stripRoom(r) { const { current, scheduled, next, humiditySensorUsed, ...rest } = r; return rest; }
 

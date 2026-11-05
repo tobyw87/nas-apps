@@ -234,9 +234,25 @@ function roomView(room, home) {
     next: desired ? nextChange(room, home) : null,
   };
 }
+const CONDITIONS = { 'clear-night': 'Clear', cloudy: 'Cloudy', exceptional: 'Unusual', fog: 'Fog', hail: 'Hail',
+  lightning: 'Lightning', 'lightning-rainy': 'Storms', partlycloudy: 'Partly cloudy', pouring: 'Heavy rain',
+  rainy: 'Rain', snowy: 'Snow', 'snowy-rainy': 'Sleet', sunny: 'Sunny', windy: 'Windy', 'windy-variant': 'Windy' };
+// Outdoor conditions from HA's weather entity (WEATHER_ENTITY in .env, else the first weather.* found).
+function outdoorView() {
+  const id = process.env.WEATHER_ENTITY ||
+    (states['weather.forecast_home'] ? 'weather.forecast_home' : Object.keys(states).find((k) => k.startsWith('weather.')));
+  const w = id && states[id];
+  if (!w || w.state === 'unavailable') return null;
+  const a = w.attributes;
+  const t = Number(a.temperature);
+  if (!Number.isFinite(t)) return null;
+  const unit = a.temperature_unit || '°F';
+  return { temp: unit.includes('C') ? t * 9 / 5 + 32 : t, humidity: a.humidity ?? null,
+           condition: CONDITIONS[w.state] || String(w.state).replace(/-/g, ' ') };
+}
 function stateView() {
   const home = homeState();
-  return { ok: !haError, error: haError, lastPoll, home, scheduleEnabled: config.scheduleEnabled,
+  return { ok: !haError, error: haError, lastPoll, home, outdoor: outdoorView(), scheduleEnabled: config.scheduleEnabled,
            mode: config.mode, away: config.away, rooms: config.rooms.map((r) => roomView(r, home)) };
 }
 function send(res, code, obj) {
