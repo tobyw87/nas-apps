@@ -26,25 +26,31 @@ h1{margin:0;font-size:4.2vh;font-weight:600}
 .ctl .sched-btn{display:inline-block}
 .rooms{flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:2.5vw;min-height:0}
 @media (orientation:portrait){.rooms{grid-template-columns:1fr}}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:3vh;padding:3.5vh 2.2vw;display:flex;flex-direction:column;justify-content:space-between;min-height:0}
-.name{font-size:3.4vh;color:var(--muted);font-weight:500}
-.temp{font-size:15vh;font-weight:200;line-height:1;letter-spacing:-.4vh}
-.ctl .temp{font-size:12vh}
-.temp small{font-size:5vh;color:var(--muted);letter-spacing:0}
-.hum{font-size:3.2vh;color:var(--muted);margin-top:.5vh}
-.status{font-size:3vh;font-weight:600}
+/* everything inside a card is sized from the card itself (container units), so it fills the box on any screen */
+.card{container-type:size;background:var(--panel);border:1px solid var(--line);border-radius:3vh;min-height:0;overflow:hidden}
+.inner{height:100%;display:grid;grid-template-rows:auto 1fr auto;padding:6cqh 7cqw 5.5cqh}
+.name{font-size:min(8cqh,10cqw);color:var(--muted);font-weight:500;line-height:1.1}
+.mid{display:flex;flex-direction:column;justify-content:center;min-height:0}
+.temp{font-size:min(38cqh,52cqw);font-weight:200;line-height:.9;letter-spacing:-.02em;white-space:nowrap}
+.ctl .temp{font-size:min(28cqh,46cqw)}
+.temp small{font-size:.28em;color:var(--muted);letter-spacing:0;margin-left:.08em;vertical-align:.95em}
+.hum{font-size:min(6.5cqh,8.5cqw);color:var(--muted);margin-top:2cqh;white-space:nowrap}
+.ctl .hum{font-size:min(5.5cqh,8cqw)}
+.status{font-size:min(6.8cqh,8.6cqw);font-weight:600;line-height:1.2;white-space:nowrap}
 .status.heat{color:var(--heat)}.status.cool{color:var(--cool)}.status.off{color:var(--muted)}
-.next{font-size:2.3vh;color:var(--muted);margin-top:.6vh}
+.next{font-size:min(4.8cqh,6cqw);color:var(--muted);margin-top:.8cqh;min-height:1.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctl .status{font-size:min(5.6cqh,8cqw)}
+.ctl .next{font-size:min(4.2cqh,5.6cqw)}
 .manual{color:var(--warn)}
-.controls{display:none;align-items:center;justify-content:space-between;gap:1vw;margin-top:1.6vh;background:var(--panel2);border-radius:2.4vh;padding:1vh}
+.controls{display:none;align-items:center;justify-content:space-between;gap:2cqw;margin-top:3cqh;background:var(--panel2);border-radius:min(4cqh,5cqw);padding:min(2cqh,2.4cqw)}
 .ctl .controls{display:flex}
-.step{display:flex;align-items:center;gap:.6vw}
-.btn{width:8vh;height:8vh;border-radius:50%;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:4.5vh;line-height:1;display:grid;place-items:center;cursor:pointer;padding:0}
+.step{display:flex;align-items:center;gap:1.5cqw}
+.btn{width:min(13cqh,15cqw);height:min(13cqh,15cqw);border-radius:50%;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:min(7.5cqh,9cqw);line-height:1;display:grid;place-items:center;cursor:pointer;padding:0}
 .btn:active{transform:scale(.94);background:var(--line)}
-.tgt{min-width:9vh;text-align:center;font-size:4.4vh;font-weight:500}
+.tgt{min-width:2.4em;text-align:center;font-size:min(8cqh,10cqw);font-weight:500}
 .tgt.pending{color:var(--heat)}
-.seg{display:flex;background:var(--panel);border-radius:1.6vh;padding:.5vh;gap:.3vh}
-.seg button{font:inherit;font-size:2.5vh;border:0;background:none;color:var(--muted);padding:1.6vh 1.2vw;border-radius:1.2vh;cursor:pointer}
+.seg{display:flex;background:var(--panel);border-radius:min(2.6cqh,3.2cqw);padding:min(1cqh,1.2cqw);gap:.5cqw}
+.seg button{font:inherit;font-size:min(4.8cqh,6cqw);border:0;background:none;color:var(--muted);padding:min(2.6cqh,3.2cqw) min(2.6cqh,3.4cqw);border-radius:min(2cqh,2.4cqw);cursor:pointer}
 .seg button.on{background:var(--heat-soft);color:var(--heat);font-weight:700}
 .seg button.on.cool{background:var(--cool-soft);color:var(--cool)}
 .seg button.on.off{background:var(--line);color:var(--text)}
@@ -107,15 +113,16 @@ function render() {
     const manual = r.scheduled && ((r.scheduled.hvac === 'off') !== (c.hvac === 'off') || (c.hvac !== 'off' && c.target != null && r.scheduled.temp !== c.target));
     const nx = r.next ? `${r.next.desired && r.next.desired.hvac !== 'off' ? r.next.desired.temp + '°' : 'Off'} at ${fmtTime(r.next.at)}` : '';
     const nextLine = manual && r.next ? `<div class="next manual">Manual · schedule resumes ${fmtTime(r.next.at)}</div>` : nx ? `<div class="next">Next: ${nx}</div>` : '';
-    return `<div class="card" data-id="${r.id}"><div class="name">${r.name}</div>
-      <div><div class="temp">${r1(c.temp)}<small>°F</small></div><div class="hum">${c.humidity == null ? '' : '💧 ' + Math.round(c.humidity) + '% humidity'}</div></div>
-      <div><div class="status ${cls}">${st}</div>${nextLine}
+    return `<div class="card" data-id="${r.id}"><div class="inner">
+      <div class="name">${r.name}</div>
+      <div class="mid"><div class="temp">${r1(c.temp)}<small>°F</small></div><div class="hum">${c.humidity == null ? '&nbsp;' : '💧 ' + Math.round(c.humidity) + '% humidity'}</div></div>
+      <div><div class="status ${cls}">${st}</div>${nextLine || '<div class="next">&nbsp;</div>'}
         <div class="controls">
           <div class="step"><button class="btn" data-step="-1" aria-label="Lower">−</button>
             <div class="tgt ${p ? 'pending' : ''}">${off && !p ? '–' : (tgt ?? '–') + '°'}</div>
             <button class="btn" data-step="1" aria-label="Raise">+</button></div>
           <div class="seg"><button data-hvac="${S.mode}" class="${off ? '' : 'on ' + cls}">${S.mode === 'cool' ? 'Cool' : 'Heat'}</button><button data-hvac="off" class="${off ? 'on off' : ''}">Off</button></div>
-        </div></div></div>`;
+        </div></div></div></div>`;
   }).join('');
 }
 document.addEventListener('click', async (e) => {
