@@ -1,0 +1,18 @@
+# Thermostat page for the three Amana wall units (talks to Home Assistant on the same NAS).
+# Uses the host network so it can reach Home Assistant at 127.0.0.1:8123 (Synology blocks
+# containers on Docker's bridge from reaching the NAS's own LAN address). Listens only on
+# 127.0.0.1:${HOST_PORT}; reached over Tailscale through "tailscale serve" (see install.sh).
+services:
+  thermostat:
+    build: .
+    image: thermostat:latest
+    init: true
+    env_file: .env
+    network_mode: host
+    environment:
+      DATA_DIR: /data
+      PORT: ${HOST_PORT}
+      LISTEN_HOST: 127.0.0.1
+    restart: unless-stopped
+    volumes:
+      - ./data:/data

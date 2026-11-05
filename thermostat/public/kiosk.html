@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thermostat</title>
+<style>
+:root{--bg:#14110f;--panel:#1e1a17;--line:#3a332d;--text:#f3ece4;--muted:#a69a8e;--heat:#ff8a3d;--cool:#5ab4ff;--warn:#f2c14e}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;cursor:none}
+.wrap{height:100%;display:flex;flex-direction:column;padding:3.5vh 3.5vw;gap:3vh}
+header{display:flex;justify-content:space-between;align-items:baseline}
+h1{margin:0;font-size:4.2vh;font-weight:600}
+.clock{font-size:4.2vh;color:var(--muted);font-variant-numeric:tabular-nums}
+.away{font-size:2.6vh;color:var(--warn);margin-left:1.5vw}
+.rooms{flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:2.5vw}
+@media (orientation:portrait){.rooms{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:3vh;padding:4vh 2.5vw;display:flex;flex-direction:column;justify-content:space-between}
+.name{font-size:3.6vh;color:var(--muted);font-weight:500}
+.temp{font-size:17vh;font-weight:200;line-height:1;letter-spacing:-.4vh}
+.temp small{font-size:5vh;color:var(--muted);letter-spacing:0}
+.hum{font-size:3.6vh;color:var(--muted)}
+.status{font-size:3.2vh;font-weight:600}
+.status.heat{color:var(--heat)}.status.cool{color:var(--cool)}.status.off{color:var(--muted)}
+.next{font-size:2.5vh;color:var(--muted);margin-top:.8vh}
+.err{color:var(--warn);font-size:2.6vh}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><div><h1 style="display:inline">Thermostat</h1><span class="away" id="away"></span></div><div class="clock" id="clock"></div></header>
+  <div class="rooms" id="rooms"></div>
+  <div class="err" id="err"></div>
+</div>
+<script>
+const r1 = (v) => v == null ? '–' : Math.round(v);
+function fmtTime(iso) { return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+function tickClock() { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+async function load() {
+  try {
+    const s = await (await fetch('/api/state', { cache: 'no-store' })).json();
+    document.getElementById('err').textContent = s.ok ? '' : 'Home Assistant not responding';
+    document.getElementById('away').textContent = s.home === false ? '• Away' : '';
+    document.getElementById('rooms').innerHTML = s.rooms.map((r) => {
+      const c = r.current, off = c.hvac === 'off' || !c.available;
+      const cls = off ? 'off' : (c.hvac === 'cool' ? 'cool' : 'heat');
+      const st = !c.available ? 'Unavailable' : off ? 'Off' : (cls === 'cool' ? 'Cooling to ' : 'Heating to ') + c.target + '°';
+      const nx = r.next ? `${r.next.desired && r.next.desired.hvac !== 'off' ? r.next.desired.temp + '°' : 'Off'} at ${fmtTime(r.next.at)}` : '';
+      return `<div class="card"><div class="name">${r.name}</div>
+        <div><div class="temp">${r1(c.temp)}<small>°F</small></div><div class="hum">${c.humidity == null ? '' : '💧 ' + Math.round(c.humidity) + '% humidity'}</div></div>
+        <div><div class="status ${cls}">${st}</div><div class="next">${nx ? 'Next: ' + nx : ''}</div></div></div>`;
+    }).join('');
+  } catch (e) { document.getElementById('err').textContent = 'Thermostat server not responding'; }
+}
+tickClock(); setInterval(tickClock, 10000);
+load(); setInterval(load, 20000);
+</script>
+</body>
+</html>

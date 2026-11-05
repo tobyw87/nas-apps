@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14110f">
+<title>Thermostat</title>
+<style>
+:root{
+  --bg:#14110f; --panel:#1e1a17; --panel2:#27221e; --line:#3a332d; --text:#f3ece4; --muted:#a69a8e;
+  --heat:#ff8a3d; --heat-soft:#ff8a3d22; --cool:#5ab4ff; --cool-soft:#5ab4ff22; --ok:#7fd38a; --warn:#f2c14e; --bad:#ff6b6b;
+  --accent:var(--heat); --accent-soft:var(--heat-soft);
+}
+body.cool{--accent:var(--cool);--accent-soft:var(--cool-soft)}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button,input,select{font:inherit;color:inherit}
+.wrap{max-width:1100px;margin:0 auto;padding:16px 16px 48px}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-bottom:18px}
+h1{font-size:22px;margin:0;letter-spacing:.2px;flex:1 1 auto}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;background:var(--panel2);font-size:14px;color:var(--muted)}
+.pill b{color:var(--text);font-weight:600}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+.tabs{display:flex;gap:4px;background:var(--panel);padding:4px;border-radius:12px;width:max-content;margin-bottom:16px}
+.tabs button{border:0;background:none;padding:8px 16px;border-radius:9px;cursor:pointer;color:var(--muted)}
+.tabs button.on{background:var(--panel2);color:var(--text)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px}
+.card h2{font-size:17px;margin:0 0 10px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.now{display:flex;align-items:baseline;gap:14px}
+.big{font-size:56px;font-weight:300;line-height:1;letter-spacing:-1px}
+.big small{font-size:24px;color:var(--muted)}
+.hum{color:var(--muted);font-size:15px}
+.status{font-size:13px;padding:3px 9px;border-radius:999px;background:var(--panel2);color:var(--muted);font-weight:500}
+.status.heat{background:var(--heat-soft);color:var(--heat)}.status.cool{background:var(--cool-soft);color:var(--cool)}
+.ctrl{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:16px 0 12px;padding:10px;background:var(--panel2);border-radius:14px}
+.stepper{display:flex;align-items:center;gap:6px}
+.round{width:44px;height:44px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-size:22px;cursor:pointer;display:grid;place-items:center}
+.round:active{transform:scale(.95)}
+.target{min-width:70px;text-align:center;font-size:28px;font-weight:500}
+.target.pending{color:var(--accent)}
+.seg{display:flex;background:var(--panel);border-radius:10px;padding:3px;gap:2px}
+.seg button{border:0;background:none;padding:7px 12px;border-radius:8px;cursor:pointer;color:var(--muted);font-size:14px}
+.seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.seg button.on.off{background:var(--panel2);color:var(--text)}
+.sched{font-size:14px;color:var(--muted)}
+.sched b{color:var(--text);font-weight:600}
+.override{color:var(--warn)}
+.room-edit{margin-bottom:14px}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.row+.row{margin-top:10px}
+label.sw{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+.sw input{appearance:none;width:40px;height:24px;border-radius:999px;background:var(--line);position:relative;cursor:pointer;transition:.15s;margin:0}
+.sw input::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.15s}
+.sw input:checked{background:var(--accent)}
+.sw input:checked::after{left:19px}
+input[type=time],input[type=number],select{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:7px 9px}
+input[type=number]{width:70px}
+.block{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel2);margin-top:10px}
+.block.disabled{opacity:.55}
+.days{display:flex;gap:3px}
+.days button{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-size:12px;color:var(--muted)}
+.days button.on{background:var(--accent-soft);border-color:transparent;color:var(--accent);font-weight:700}
+.del{margin-left:auto;border:0;background:none;color:var(--muted);cursor:pointer;font-size:20px;padding:4px 8px}
+.del:hover{color:var(--bad)}
+.add{margin-top:10px;border:1px dashed var(--line);background:none;border-radius:12px;padding:9px 14px;cursor:pointer;color:var(--muted);width:100%}
+.add:hover{color:var(--text);border-color:var(--muted)}
+.savebar{position:sticky;bottom:0;display:none;gap:10px;justify-content:flex-end;align-items:center;padding:12px 16px;margin:16px -16px 0;background:linear-gradient(transparent,var(--bg) 30%)}
+.savebar.show{display:flex}
+.btn{border:0;border-radius:11px;padding:10px 18px;cursor:pointer;font-weight:600}
+.btn.primary{background:var(--accent);color:#1a120c}
+.btn.ghost{background:var(--panel2)}
+.muted{color:var(--muted);font-size:14px}
+.err{background:#ff6b6b22;color:var(--bad);border-radius:12px;padding:10px 14px;margin-bottom:14px;display:none}
+.err.show{display:block}
+.hidden{display:none!important}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);padding:10px 16px;border-radius:12px;opacity:0;transition:.2s;pointer-events:none}
+.toast.show{opacity:1}
+@media (max-width:420px){.big{font-size:48px}.days button{width:27px;height:28px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Thermostat</h1>
+    <span class="pill" id="presence"><span class="dot"></span><b>…</b></span>
+    <span class="pill" id="conn"><span class="dot"></span>Home Assistant</span>
+  </header>
+  <div class="err" id="err"></div>
+  <div class="tabs" role="tablist">
+    <button class="on" data-tab="rooms">Rooms</button>
+    <button data-tab="schedule">Schedule</button>
+  </div>
+
+  <section id="rooms" class="grid"></section>
+
+  <section id="schedule" class="hidden">
+    <div class="card room-edit">
+      <h2>General</h2>
+      <div class="row">
+        <label class="sw"><input type="checkbox" id="g-enabled"> Schedule on</label>
+        <span class="muted">When off, the units stay wherever you set them.</span>
+      </div>
+      <div class="row">
+        <span>Season</span>
+        <div class="seg" id="g-mode"><button data-v="heat">Heat</button><button data-v="cool">Cool</button></div>
+      </div>
+      <div class="row">
+        <label class="sw"><input type="checkbox" id="g-away"> Away mode</label>
+        <span class="muted">When nobody is home, every room goes to</span>
+        <input type="number" id="g-away-temp" min="61" max="86"> °
+      </div>
+    </div>
+    <div id="room-edits"></div>
+    <div class="savebar" id="savebar">
+      <span class="muted">Unsaved changes</span>
+      <button class="btn ghost" id="cancel">Cancel</button>
+      <button class="btn primary" id="save">Save schedule</button>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const DAYS = ['S','M','T','W','T','F','S'];
+let state = null, draft = null, dirty = false;
+const pending = {}; // room id -> {temp, timer}
+
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2200); }
+function fmtTime(iso) {
+  const d = new Date(iso), now = new Date();
+  const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const days = Math.round((new Date(d.toDateString()) - new Date(now.toDateString())) / 864e5);
+  return days === 0 ? t : days === 1 ? 'tomorrow ' + t : d.toLocaleDateString([], { weekday: 'short' }) + ' ' + t;
+}
+const deg = (v) => v == null ? '–' : Math.round(v * 10) / 10;
+const desc = (d) => !d ? 'off' : d.hvac === 'off' ? 'Off' : d.temp + '°';
+
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+async function refresh() {
+  try { state = await api('GET', '/api/state'); render(); }
+  catch (e) { showErr('Can’t reach the thermostat server: ' + e.message); }
+}
+function showErr(m) { const e = $('#err'); e.textContent = m || ''; e.classList.toggle('show', !!m); }
+
+function render() {
+  document.body.classList.toggle('cool', state.mode === 'cool');
+  const p = $('#presence');
+  p.querySelector('.dot').className = 'dot ' + (state.home === false ? 'warn' : state.home ? 'ok' : '');
+  p.querySelector('b').textContent = state.home === false ? 'Away' : state.home ? 'Home' : 'Presence unknown';
+  $('#conn .dot').className = 'dot ' + (state.ok ? 'ok' : 'bad');
+  showErr(state.ok ? '' : 'Home Assistant error: ' + state.error);
+  renderRooms();
+  if (!dirty) { draft = JSON.parse(JSON.stringify({ scheduleEnabled: state.scheduleEnabled, mode: state.mode, away: state.away, rooms: state.rooms.map(stripRoom) })); renderSchedule(); }
+}
+function stripRoom(r) { const { current, scheduled, next, humiditySensorUsed, ...rest } = r; return rest; }
+
+function renderRooms() {
+  const box = $('#rooms');
+  box.innerHTML = '';
+  for (const r of state.rooms) {
+    const c = r.current, pend = pending[r.id];
+    const isOff = c.hvac === 'off';
+    const tgt = pend ? pend.temp : c.target;
+    const el = document.createElement('div');
+    el.className = 'card';
+    let sched = '<span class="sched">Schedule off for this room</span>';
+    if (r.scheduled) {
+      const manual = (r.scheduled.hvac === 'off') !== isOff || (!isOff && c.target != null && r.scheduled.temp !== c.target);
+      const nx = r.next ? ` → <b>${desc(r.next.desired)}</b> at ${fmtTime(r.next.at)}` : '';
+      sched = `<span class="sched">Schedule: <b>${desc(r.scheduled)}</b>${r.scheduled.reason === 'away' ? ' (away)' : ''}${nx}</span>`
+        + (manual ? `<div class="sched override">Manual setting — schedule takes over ${r.next ? 'at ' + fmtTime(r.next.at) : 'at the next change'}</div>` : '');
+    }
+    const mode = isOff ? 'off' : (c.hvac === 'cool' ? 'cool' : 'heat');
+    el.innerHTML = `
+      <h2>${r.name}<span class="status ${isOff ? '' : mode}">${!c.available ? 'Unavailable' : isOff ? 'Off' : (mode === 'cool' ? 'Cooling to ' : 'Heating to ') + tgt + '°'}</span></h2>
+      <div class="now"><div class="big">${deg(c.temp)}<small>°F</small></div><div class="hum">${c.humidity == null ? '' : '💧 ' + Math.round(c.humidity) + '%'}</div></div>
+      <div class="ctrl">
+        <div class="stepper">
+          <button class="round" data-step="-1" aria-label="Lower">−</button>
+          <div class="target ${pend ? 'pending' : ''}">${isOff && !pend ? '–' : (tgt ?? '–') + '°'}</div>
+          <button class="round" data-step="1" aria-label="Raise">+</button>
+        </div>
+        <div class="seg">
+          <button data-hvac="${state.mode}" class="${!isOff ? 'on' : ''}">${state.mode === 'cool' ? 'Cool' : 'Heat'}</button>
+          <button data-hvac="off" class="${isOff ? 'on off' : ''}">Off</button>
+        </div>
+      </div>
+      ${sched}`;
+    el.querySelectorAll('[data-step]').forEach((b) => b.onclick = () => step(r, Number(b.dataset.step)));
+    el.querySelectorAll('[data-hvac]').forEach((b) => b.onclick = () => setHvac(r, b.dataset.hvac));
+    box.appendChild(el);
+  }
+}
+function step(r, d) {
+  const base = pending[r.id]?.temp ?? r.current.target ?? (r.scheduled?.temp || 70);
+  const t = Math.max(61, Math.min(86, base + d));
+  clearTimeout(pending[r.id]?.timer);
+  pending[r.id] = { temp: t, timer: setTimeout(() => commit(r, t), 1200) };
+  renderRooms();
+}
+async function commit(r, t) {
+  try { state = await api('POST', '/api/room/' + r.id, { temp: t, hvac: r.current.hvac === 'cool' ? 'cool' : state.mode }); toast(`${r.name} set to ${t}°`); }
+  catch (e) { toast('Failed: ' + e.message); }
+  delete pending[r.id]; render();
+}
+async function setHvac(r, hvac) {
+  try { state = await api('POST', '/api/room/' + r.id, hvac === 'off' ? { hvac: 'off' } : { hvac, temp: r.current.target || r.scheduled?.temp || 70 });
+        toast(`${r.name} ${hvac === 'off' ? 'turned off' : 'on'}`); render(); }
+  catch (e) { toast('Failed: ' + e.message); }
+}
+
+// ----- schedule editor -----
+function markDirty() { dirty = true; $('#savebar').classList.add('show'); }
+function renderSchedule() {
+  $('#g-enabled').checked = draft.scheduleEnabled;
+  $('#g-away').checked = draft.away.enabled;
+  $('#g-away-temp').value = draft.away.temp;
+  $('#g-mode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === draft.mode));
+  const box = $('#room-edits'); box.innerHTML = '';
+  draft.rooms.forEach((room) => {
+    const el = document.createElement('div');
+    el.className = 'card room-edit';
+    el.innerHTML = `
+      <h2>${room.name}<label class="sw"><input type="checkbox" class="r-en" ${room.scheduleEnabled ? 'checked' : ''}> Follow schedule</label></h2>
+      <div class="row muted">Outside the times below:
+        <select class="r-sb-mode"><option value="temp">Hold</option><option value="off">Turn off</option></select>
+        <span class="r-sb-wrap"><input type="number" class="r-sb" min="61" max="86"> °</span>
+      </div>
+      <div class="blocks"></div>
+      <button class="add">+ Add time</button>`;
+    const sbMode = $('.r-sb-mode', el), sb = $('.r-sb', el), sbWrap = $('.r-sb-wrap', el);
+    sbMode.value = room.setback === null ? 'off' : 'temp';
+    sb.value = room.setback ?? 61; sbWrap.classList.toggle('hidden', room.setback === null);
+    sbMode.onchange = () => { room.setback = sbMode.value === 'off' ? null : Number(sb.value || 61); sbWrap.classList.toggle('hidden', room.setback === null); markDirty(); };
+    sb.onchange = () => { room.setback = Number(sb.value); markDirty(); };
+    $('.r-en', el).onchange = (e) => { room.scheduleEnabled = e.target.checked; markDirty(); };
+    const blocks = $('.blocks', el);
+    room.blocks.forEach((b, i) => {
+      const be = document.createElement('div');
+      be.className = 'block' + (b.enabled ? '' : ' disabled');
+      be.innerHTML = `
+        <label class="sw"><input type="checkbox" class="b-en" ${b.enabled ? 'checked' : ''}></label>
+        <input type="time" class="b-start" value="${b.start}"> to <input type="time" class="b-end" value="${b.end}">
+        <span><input type="number" class="b-temp" min="61" max="86" value="${b.temp}"> °</span>
+        <div class="days">${DAYS.map((d, n) => `<button data-d="${n}" class="${b.days.includes(n) ? 'on' : ''}" title="${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][n]}">${d}</button>`).join('')}</div>
+        <button class="del" title="Delete">×</button>`;
+      $('.b-en', be).onchange = (e) => { b.enabled = e.target.checked; be.classList.toggle('disabled', !b.enabled); markDirty(); };
+      $('.b-start', be).onchange = (e) => { b.start = e.target.value; markDirty(); };
+      $('.b-end', be).onchange = (e) => { b.end = e.target.value; markDirty(); };
+      $('.b-temp', be).onchange = (e) => { b.temp = Number(e.target.value); markDirty(); };
+      be.querySelectorAll('[data-d]').forEach((btn) => btn.onclick = () => {
+        const n = Number(btn.dataset.d);
+        b.days = b.days.includes(n) ? b.days.filter((x) => x !== n) : [...b.days, n].sort();
+        btn.classList.toggle('on'); markDirty();
+      });
+      $('.del', be).onclick = () => { room.blocks.splice(i, 1); markDirty(); renderSchedule(); };
+      blocks.appendChild(be);
+    });
+    $('.add', el).onclick = () => {
+      room.blocks.push({ id: 'b' + Date.now(), start: '09:00', end: '17:00', temp: 70, days: [0,1,2,3,4,5,6], enabled: true });
+      markDirty(); renderSchedule();
+    };
+    box.appendChild(el);
+  });
+}
+$('#g-enabled').onchange = (e) => { draft.scheduleEnabled = e.target.checked; markDirty(); };
+$('#g-away').onchange = (e) => { draft.away.enabled = e.target.checked; markDirty(); };
+$('#g-away-temp').onchange = (e) => { draft.away.temp = Number(e.target.value); markDirty(); };
+$('#g-mode').querySelectorAll('button').forEach((b) => b.onclick = () => { draft.mode = b.dataset.v; markDirty(); renderSchedule(); });
+$('#cancel').onclick = () => { dirty = false; $('#savebar').classList.remove('show'); render(); };
+$('#save').onclick = async () => {
+  try {
+    for (const r of draft.rooms) for (const b of r.blocks) if (!b.start || !b.end || b.start === b.end) throw new Error(`${r.name}: each time needs a start and a different end`);
+    state = await api('PUT', '/api/config', draft);
+    dirty = false; $('#savebar').classList.remove('show'); render(); toast('Schedule saved');
+  } catch (e) { toast('Not saved: ' + e.message); }
+};
+document.querySelectorAll('.tabs button').forEach((b) => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
+  $('#rooms').classList.toggle('hidden', b.dataset.tab !== 'rooms');
+  $('#schedule').classList.toggle('hidden', b.dataset.tab !== 'schedule');
+});
+refresh(); setInterval(() => { if (!Object.keys(pending).length) refresh(); }, 15000);
+</script>
+</body>
+</html>
