@@ -119,6 +119,12 @@ input[type=number]{width:70px}
         <span class="muted">When nobody is home, every room goes to</span>
         <input type="number" id="g-away-temp" min="61" max="86"> °
       </div>
+      <div class="row">
+        <label class="sw"><input type="checkbox" id="g-sensor"> Use room sensors</label>
+        <span class="muted">Buffer</span>
+        <input type="number" id="g-buffer" min="1" max="8" step="0.5"> °
+      </div>
+      <div class="row muted" id="g-sensor-note"></div>
     </div>
     <div id="room-edits"></div>
     <div class="savebar" id="savebar">
@@ -144,6 +150,13 @@ function fmtTime(iso) {
   return days === 0 ? t : days === 1 ? 'tomorrow ' + t : d.toLocaleDateString([], { weekday: 'short' }) + ' ' + t;
 }
 const deg = (v) => v == null ? '–' : Math.round(v * 10) / 10;
+function sensorNote() {
+  const sc = draft.sensorControl, h = sc.buffer / 2, cool = draft.mode === 'cool', ex = cool ? 74 : 70;
+  $('#g-buffer').disabled = !sc.enabled;
+  $('#g-sensor-note').textContent = sc.enabled
+    ? `The room sensors decide when each unit runs. With a ${sc.buffer}° buffer, a room set to ${ex}° ${cool ? 'cools' : 'heats'} when it reaches ${ex + (cool ? h : -h)}° and stops at ${ex + (cool ? -h : h)}°. A bigger buffer means fewer on/off switches (and beeps).`
+    : 'Each unit uses its own built-in thermostat, which reads the air at the wall and can run when the room is already warm.';
+}
 const desc = (d) => !d ? 'off' : d.hvac === 'off' ? 'Off' : d.temp + '°';
 
 async function api(method, url, body) {
@@ -173,7 +186,7 @@ function render() {
   $('#conn .dot').className = 'dot ' + (state.ok ? 'ok' : 'bad');
   showErr(state.ok ? '' : 'Home Assistant error: ' + state.error);
   renderRooms();
-  if (!dirty) { draft = JSON.parse(JSON.stringify({ scheduleEnabled: state.scheduleEnabled, mode: state.mode, away: state.away, rooms: state.rooms.map(stripRoom) })); renderSchedule(); }
+  if (!dirty) { draft = JSON.parse(JSON.stringify({ scheduleEnabled: state.scheduleEnabled, mode: state.mode, away: state.away, sensorControl: state.sensorControl || { enabled: true, buffer: 3 }, rooms: state.rooms.map(stripRoom) })); renderSchedule(); }
 }
 function weatherIcon(c) {
   c = (c || '').toLowerCase();
@@ -185,6 +198,13 @@ function weatherIcon(c) {
   if (c.includes('fog')) return '🌫️';
   if (c.includes('wind')) return '💨';
   return '☁️';
+}
+function statusText(c, tgt) {
+  if (!c.available) return 'Unavailable';
+  if (c.hvac === 'off') return 'Off';
+  const cool = c.hvac === 'cool';
+  if (c.running === false) return `Idle · ${tgt}°`;
+  return (cool ? 'Cooling to ' : 'Heating to ') + tgt + '°';
 }
 function stripRoom(r) { const { current, scheduled, next, humiditySensorUsed, ...rest } = r; return rest; }
 
@@ -206,7 +226,7 @@ function renderRooms() {
     }
     const mode = isOff ? 'off' : (c.hvac === 'cool' ? 'cool' : 'heat');
     el.innerHTML = `
-      <h2>${r.name}<span class="status ${isOff ? '' : mode}">${!c.available ? 'Unavailable' : isOff ? 'Off' : (mode === 'cool' ? 'Cooling to ' : 'Heating to ') + tgt + '°'}</span></h2>
+      <h2>${r.name}<span class="status ${isOff || c.running === false ? '' : mode}">${statusText(c, tgt)}</span></h2>
       <div class="now"><div class="big">${deg(c.temp)}<small>°F</small></div><div class="hum">${c.humidity == null ? '' : '💧 ' + Math.round(c.humidity) + '%'}</div></div>
       <div class="ctrl">
         <div class="stepper">
@@ -249,6 +269,9 @@ function renderSchedule() {
   $('#g-enabled').checked = draft.scheduleEnabled;
   $('#g-away').checked = draft.away.enabled;
   $('#g-away-temp').value = draft.away.temp;
+  $('#g-sensor').checked = draft.sensorControl.enabled;
+  $('#g-buffer').value = draft.sensorControl.buffer;
+  sensorNote();
   $('#g-mode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === draft.mode));
   const box = $('#room-edits'); box.innerHTML = '';
   draft.rooms.forEach((room) => {
@@ -299,6 +322,8 @@ function renderSchedule() {
 }
 $('#g-enabled').onchange = (e) => { draft.scheduleEnabled = e.target.checked; markDirty(); };
 $('#g-away').onchange = (e) => { draft.away.enabled = e.target.checked; markDirty(); };
+$('#g-sensor').onchange = (e) => { draft.sensorControl.enabled = e.target.checked; sensorNote(); markDirty(); };
+$('#g-buffer').onchange = (e) => { draft.sensorControl.buffer = Math.max(1, Math.min(8, Number(e.target.value) || 3)); e.target.value = draft.sensorControl.buffer; sensorNote(); markDirty(); };
 $('#g-away-temp').onchange = (e) => { draft.away.temp = Number(e.target.value); markDirty(); };
 $('#g-mode').querySelectorAll('button').forEach((b) => b.onclick = () => { draft.mode = b.dataset.v; markDirty(); renderSchedule(); });
 $('#cancel').onclick = () => { dirty = false; $('#savebar').classList.remove('show'); render(); };

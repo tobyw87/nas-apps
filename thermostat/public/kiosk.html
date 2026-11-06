@@ -109,14 +109,15 @@ function render() {
     const cls = off ? 'off' : (c.hvac === 'cool' ? 'cool' : 'heat');
     const p = pending[r.id];
     const tgt = p ? p.temp : c.target;
-    const st = !c.available ? 'Unavailable' : off ? 'Off' : (cls === 'cool' ? 'Cooling to ' : 'Heating to ') + tgt + '°';
+    const idle = !off && c.running === false;
+    const st = !c.available ? 'Unavailable' : off ? 'Off' : idle ? `Idle · set ${tgt}°` : (cls === 'cool' ? 'Cooling to ' : 'Heating to ') + tgt + '°';
     const manual = r.scheduled && ((r.scheduled.hvac === 'off') !== (c.hvac === 'off') || (c.hvac !== 'off' && c.target != null && r.scheduled.temp !== c.target));
     const nx = r.next ? `${r.next.desired && r.next.desired.hvac !== 'off' ? r.next.desired.temp + '°' : 'Off'} at ${fmtTime(r.next.at)}` : '';
     const nextLine = manual && r.next ? `<div class="next manual">Manual · schedule resumes ${fmtTime(r.next.at)}</div>` : nx ? `<div class="next">Next: ${nx}</div>` : '';
     return `<div class="card" data-id="${r.id}"><div class="inner">
       <div class="name">${r.name}</div>
       <div class="mid"><div class="temp">${r1(c.temp)}<small>°F</small></div><div class="hum">${c.humidity == null ? '&nbsp;' : '💧 ' + Math.round(c.humidity) + '% humidity'}</div></div>
-      <div><div class="status ${cls}">${st}</div>${nextLine || '<div class="next">&nbsp;</div>'}
+      <div><div class="status ${idle ? 'off' : cls}">${st}</div>${nextLine || '<div class="next">&nbsp;</div>'}
         <div class="controls">
           <div class="step"><button class="btn" data-step="-1" aria-label="Lower">−</button>
             <div class="tgt ${p ? 'pending' : ''}">${off && !p ? '–' : (tgt ?? '–') + '°'}</div>

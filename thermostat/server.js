@@ -2,6 +2,9 @@
 // for the three Amana wall units. Talks to Home Assistant's REST API with a long-lived token
 // (kept server-side). The schedule lives here (data/config.json) and is applied through HA's
 // SmartIR climate entities; the old HA schedule automation is switched off on startup.
+// With sensor control on, the room sensors decide when each unit runs: the unit gets Heat (with a
+// setpoint a few degrees above the target so its own thermostat doesn't stop it early) when the room
+// drops half the buffer below the target, and Off once the room is half the buffer above it.
 'use strict';
 const http = require('http');
 const fs = require('fs');
@@ -14,6 +17,9 @@ const PORT = Number(process.env.PORT) || 8080;
 const LISTEN_HOST = process.env.LISTEN_HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const CONFIG = path.join(DATA_DIR, 'config.json');
+const RUNTIME = path.join(DATA_DIR, 'state.json');
+const MIN_SWITCH_MS = (Number(process.env.MIN_SWITCH_MINUTES) || 5) * 60000; // never switch a unit on/off more often than this
+const BOOST = 4;                  // degrees past the target sent to a running unit
 const PUBLIC = path.join(__dirname, 'public');
 const OLD_AUTOMATION_ID = 'amana_heat_schedule';
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -22,6 +28,7 @@ const DEFAULT_CONFIG = {
   scheduleEnabled: true,
   mode: 'heat',
   away: { enabled: true, temp: 61 },
+  sensorControl: { enabled: true, buffer: 3 },
   rooms: [
     { id: 'office', name: 'Office', climate: 'climate.office_heat',
       tempSensor: 'sensor.office_temperature_calibrated', humiditySensor: '',
@@ -58,6 +65,10 @@ function validate(c) {
     scheduleEnabled: c.scheduleEnabled !== false,
     mode: c.mode === 'cool' ? 'cool' : 'heat',
     away: { enabled: !!(c.away && c.away.enabled), temp: clampTemp((c.away && c.away.temp) || 61) },
+    sensorControl: {
+      enabled: !c.sensorControl || c.sensorControl.enabled !== false,
+      buffer: Math.max(1, Math.min(8, Math.round(Number((c.sensorControl && c.sensorControl.buffer) || 3) * 2) / 2)),
+    },
     rooms: [],
   };
   for (const r of c.rooms) {
@@ -198,8 +209,66 @@ async function sendToRoom(room, d) {
   }
 }
 
-// ---------- scheduler ----------
-const applied = {}; // room id -> key last sent by the schedule
+// ---------- scheduler and room control ----------
+// Per room: the thermostat setting (hvac + target, from the schedule or a manual change), the key of
+// the schedule value it was last taken from, whether the unit is running, and the last command sent.
+let rt = {};
+try { rt = JSON.parse(fs.readFileSync(RUNTIME, 'utf8')) || {}; } catch { rt = {}; }
+function saveRuntime() {
+  try { fs.writeFileSync(RUNTIME + '.tmp', JSON.stringify(rt)); fs.renameSync(RUNTIME + '.tmp', RUNTIME); }
+  catch (e) { console.error('Could not save state.json:', e.message); }
+}
+function roomRt(room) {
+  if (!rt[room.id]) {
+    const c = states[room.climate];
+    rt[room.id] = c && c.state !== 'unavailable'
+      ? { hvac: c.state === 'off' ? 'off' : c.state === 'cool' ? 'cool' : 'heat', target: c.attributes.temperature ?? 61 }
+      : { hvac: 'off', target: null };
+  }
+  return rt[room.id];
+}
+function setSetting(room, hvac, target) {
+  const r = roomRt(room);
+  if (r.hvac !== hvac || r.target !== target) { r.hvac = hvac; r.target = target; r.lastSwitch = 0; r.running = null; }
+}
+
+// What to send the unit now, given the setting and the room sensor.
+function command(room) {
+  const r = roomRt(room);
+  if (r.hvac === 'off' || r.target == null) { r.running = false; return { hvac: 'off' }; }
+  const t = num(states[room.tempSensor]);
+  if (!config.sensorControl.enabled || t == null) {
+    r.running = null; // unit's own thermostat decides
+    return { hvac: r.hvac, temp: r.target };
+  }
+  const half = config.sensorControl.buffer / 2;
+  const cool = r.hvac === 'cool';
+  const wantOn = cool ? t >= r.target + half : t <= r.target - half;
+  const wantOff = cool ? t <= r.target - half : t >= r.target + half;
+  const canSwitch = !r.lastSwitch || Date.now() - r.lastSwitch >= MIN_SWITCH_MS;
+  if (r.running == null) r.running = cool ? t > r.target : t < r.target;
+  else if (!r.running && wantOn && canSwitch) r.running = true;
+  else if (r.running && wantOff && canSwitch) r.running = false;
+  if (!r.running) return { hvac: 'off' };
+  return cool ? { hvac: 'cool', temp: Math.max(64, r.target - BOOST) }
+              : { hvac: 'heat', temp: Math.min(80, r.target + BOOST) };
+}
+async function controlRoom(room) {
+  if (!states[room.climate] || states[room.climate].state === 'unavailable') return false;
+  const r = roomRt(room);
+  const wasRunning = r.running;
+  const cmd = command(room);
+  if (r.sent === key(cmd)) return false;
+  await sendToRoom(room, cmd);
+  r.sent = key(cmd);
+  if (wasRunning !== r.running) r.lastSwitch = Date.now();
+  saveRuntime();
+  const t = num(states[room.tempSensor]);
+  console.log(new Date().toISOString(), `${room.name}: ${r.hvac} ${r.target ?? ''} -> unit ${cmd.hvac} ${cmd.temp ?? ''}` +
+    (t != null ? ` (room ${t}°)` : ''));
+  return true;
+}
+
 let busy = false;
 async function tick() {
   if (busy) return; busy = true;
@@ -209,15 +278,16 @@ async function tick() {
     await lookupAreaHumidity();
     const home = homeState();
     for (const room of config.rooms) {
+      const r = roomRt(room);
       const d = desiredFor(room, new Date(), home);
-      if (!d) { delete applied[room.id]; continue; }
-      if (applied[room.id] === key(d)) continue;
-      if (!states[room.climate] || states[room.climate].state === 'unavailable') continue;
+      // the schedule takes over whenever its value changes; manual settings hold until then
+      if (r.schedKey !== key(d)) {
+        r.schedKey = key(d);
+        if (d) setSetting(room, d.hvac, d.hvac === 'off' ? null : d.temp);
+        saveRuntime();
+      }
       try {
-        await sendToRoom(room, d);
-        applied[room.id] = key(d);
-        console.log(new Date().toISOString(), `${room.name}: schedule -> ${d.hvac} ${d.temp ?? ''} (${d.reason})`);
-        await new Promise((r) => setTimeout(r, 3000)); // space out IR bursts
+        if (await controlRoom(room)) await new Promise((res) => setTimeout(res, 3000)); // space out IR bursts
       } catch (e) { console.error(`${room.name}: ${e.message}`); }
     }
   } finally { busy = false; }
@@ -238,13 +308,16 @@ function roomView(room, home) {
   const c = states[room.climate];
   const hum = findHumidity(room);
   const desired = desiredFor(room, new Date(), home);
+  const r = roomRt(room);
   return {
     ...room,
     humiditySensorUsed: hum,
     current: {
       available: !!c && c.state !== 'unavailable',
-      hvac: c ? c.state : null,
-      target: c ? c.attributes.temperature ?? null : null,
+      hvac: r.hvac,                       // the thermostat setting
+      target: r.hvac === 'off' ? r.target ?? null : r.target,
+      running: r.hvac === 'off' ? false : r.running ?? null, // null: the unit's own thermostat decides
+      unit: c ? { hvac: c.state, target: c.attributes.temperature ?? null } : null,
       temp: num(states[room.tempSensor]) ?? (c ? c.attributes.current_temperature ?? null : null),
       humidity: num(states[hum]),
     },
@@ -271,7 +344,7 @@ function outdoorView() {
 function stateView() {
   const home = homeState();
   return { ok: !haError, error: haError, lastPoll, home, outdoor: outdoorView(), scheduleEnabled: config.scheduleEnabled,
-           mode: config.mode, away: config.away, rooms: config.rooms.map((r) => roomView(r, home)) };
+           mode: config.mode, away: config.away, sensorControl: config.sensorControl, rooms: config.rooms.map((r) => roomView(r, home)) };
 }
 function send(res, code, obj) {
   res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -318,12 +391,14 @@ http.createServer(async (req, res) => {
       const room = config.rooms.find((r) => r.id === m[1]);
       if (!room) return send(res, 404, { error: 'no such room' });
       const b = await readBody(req);
-      if (b.hvac === 'off') await sendToRoom(room, { hvac: 'off' });
+      const cur = roomRt(room);
+      if (b.hvac === 'off') setSetting(room, 'off', cur.target);
       else {
-        const hvac = b.hvac === 'cool' || b.hvac === 'heat' ? b.hvac : (states[room.climate]?.state === 'cool' ? 'cool' : config.mode);
-        const temp = clampTemp(b.temp ?? states[room.climate]?.attributes.temperature ?? 70);
-        await sendToRoom(room, { hvac, temp });
+        const hvac = b.hvac === 'cool' || b.hvac === 'heat' ? b.hvac : (cur.hvac === 'cool' ? 'cool' : config.mode);
+        setSetting(room, hvac, clampTemp(b.temp ?? cur.target ?? 70));
       }
+      saveRuntime();
+      await controlRoom(room);
       await poll();
       return send(res, 200, viewFor(req));
     }
