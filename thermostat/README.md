@@ -1,10 +1,10 @@
 # thermostat
 
 Web page for the three Amana wall units (office, living room, bedroom): current temperature and
-humidity per room, manual control, and the heating/cooling schedule with away mode. A kiosk view
-at `/kiosk` is made for the Pi slideshow.
+humidity per room, manual control, the heating/cooling schedule with away mode, and a **Power** tab
+for electricity use. A kiosk view at `/kiosk` is made for the Pi slideshow.
 
-- Lives in `/volume1/docker/thermostat` (Node 20, no npm packages; state in `data/config.json`).
+- Lives in `/volume1/docker/thermostat` (Node 22, no npm packages; state in `data/config.json`).
 - Talks to Home Assistant's REST API with a long-lived token in `.env`. HA controls the units
   through the SmartIR climate entities (`climate.office_heat`, `climate.living_room_heat`,
   `climate.bedroom_heat`, code file 9901 = Gree protocol in °F).
@@ -26,3 +26,23 @@ room set to T heats when it drops to T − B/2 and switches the unit off at T + 
 sent T + 4° so its own thermostat doesn't stop it early. Units never switch on/off more than once
 every 5 minutes (`MIN_SWITCH_MINUTES` in `.env` to change). If a room's sensor is unavailable, that
 unit falls back to its own thermostat at the set temperature. Runtime state is kept in `data/state.json`.
+
+## Power tab
+
+`/#power` (Tailscale) or `http://192.168.50.133:8120/power` (home network, read-only).
+
+- **Daily use** comes from Home Assistant's ComEd (Opower) long-term statistics over HA's WebSocket API
+  (every `opower:*elec*energy_consumption` statistic is added together, so an old and a new account join up).
+  A recent day counts as finished once it has 23+ hours of data.
+- **Outdoor temperatures** are daily means from Open-Meteo (free, no key) for `zone.home`'s location
+  (`LATITUDE`/`LONGITUDE` in `.env` to override), cached in `data/weather.json`.
+- **Weather model:** kWh/day = base + heat slope × degrees below a balance point (+ a cooling term above
+  another), fitted to the past year with recent weeks weighted most (60-day half-life). The balance points
+  are chosen by best fit (BIC). The last 7 finished days are judged against a model trained on the days
+  before them once there are 8+ days at 50° or colder; until then the model includes this week and the
+  page says the comparison is rough.
+- **Bill projection:** ComEd's usage to date + expected use for the rest of the cycle at the forecast
+  temperatures (last year's temperatures past the 16-day forecast). Cycle end comes from Opower's
+  end-date sensor if present, else start + 29 days.
+- **Heating hours** per room are logged by the scheduler in `data/runtime-log.json` (120 days kept).
+- `/api/power` returns all of it as JSON (cached 10 minutes).

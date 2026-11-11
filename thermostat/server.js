@@ -9,6 +9,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const createPower = require('./power');
 
 const HA_URL = (process.env.HA_URL || '').replace(/\/$/, '');
 const HA_TOKEN = process.env.HA_TOKEN || '';
@@ -158,6 +159,7 @@ async function ha(method, p, body) {
   return res.json();
 }
 let states = {}; let haError = null; let lastPoll = 0;
+const power = createPower({ HA_URL, HA_TOKEN, TZ, DATA_DIR, getStates: () => states });
 async function poll() {
   try {
     const list = await ha('GET', '/api/states');
@@ -290,6 +292,7 @@ async function tick() {
         if (await controlRoom(room)) await new Promise((res) => setTimeout(res, 3000)); // space out IR bursts
       } catch (e) { console.error(`${room.name}: ${e.message}`); }
     }
+    power.recordRuntime(config.rooms, rt);
   } finally { busy = false; }
 }
 async function disableOldAutomation() {
@@ -365,7 +368,7 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '
 const CONTROL_IPS = (process.env.CONTROL_IPS || '').split(',').map((x) => x.trim()).filter(Boolean);
 const ipOf = (req) => (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
 const canControl = (req) => ['127.0.0.1', '::1'].includes(ipOf(req)) || CONTROL_IPS.includes(ipOf(req));
-const LAN_OK = new Set(['/kiosk', '/kiosk.html', '/api/state', '/healthz']);
+const LAN_OK = new Set(['/kiosk', '/kiosk.html', '/power', '/api/state', '/api/power', '/healthz']);
 
 const viewFor = (req) => ({ ...stateView(), canControl: canControl(req) });
 
@@ -402,9 +405,12 @@ http.createServer(async (req, res) => {
       await poll();
       return send(res, 200, viewFor(req));
     }
+    if (url.pathname === '/api/power' && req.method === 'GET') {
+      return send(res, 200, await power.get(config.rooms, url.searchParams.has('refresh') && canControl(req)));
+    }
     if (url.pathname === '/healthz') return send(res, 200, { ok: !haError });
     // static files
-    let f = url.pathname === '/' ? '/index.html' : url.pathname === '/kiosk' ? '/kiosk.html' : url.pathname;
+    let f = url.pathname === '/' || url.pathname === '/power' ? '/index.html' : url.pathname === '/kiosk' ? '/kiosk.html' : url.pathname;
     f = path.join(PUBLIC, path.normalize(f).replace(/^(\.\.[\/\\])+/, ''));
     if (!f.startsWith(PUBLIC) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return send(res, 404, { error: 'not found' });
     res.writeHead(200, { 'Content-Type': TYPES[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
@@ -415,5 +421,6 @@ http.createServer(async (req, res) => {
 }).listen(PORT, LISTEN_HOST, () => console.log(`Thermostat listening on ${LISTEN_HOST}:${PORT}; HA at ${HA_URL}`));
 
 if (!HA_URL || !HA_TOKEN) console.error('HA_URL and HA_TOKEN must be set in .env');
-disableOldAutomation().then(tick);
+disableOldAutomation().then(tick).then(() => power.get(config.rooms)); // warm the Power tab's data
 setInterval(tick, 30000);
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { power.flushRuntime(); process.exit(0); });

@@ -83,6 +83,51 @@ input[type=number]{width:70px}
 .hidden{display:none!important}
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);padding:10px 16px;border-radius:12px;opacity:0;transition:.2s;pointer-events:none}
 .toast.show{opacity:1}
+/* ----- Power tab ----- */
+#power{display:grid;gap:14px}
+#power .two{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.eyebrow{font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:600}
+.verdict{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
+.badge{font-size:14px;font-weight:700;padding:5px 12px;border-radius:999px;background:var(--panel2);color:var(--text)}
+.badge.expected{background:#7fd38a22;color:var(--ok)}.badge.below{background:#5ab4ff22;color:var(--cool)}
+.badge.above{background:#f2c14e22;color:var(--warn)}.badge.well-above{background:#ff6b6b22;color:var(--bad)}
+.vline{font-size:22px;font-weight:600;line-height:1.25}
+.stats{display:flex;flex-wrap:wrap;gap:12px 34px;margin:14px 0 4px}
+.stat .v{font-size:34px;font-weight:300;letter-spacing:-.5px;line-height:1.1}
+.stat .v small{font-size:15px;color:var(--muted);margin-left:3px}
+.stat .l{font-size:13px;color:var(--muted)}
+.split{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--panel2);margin:14px 0 8px}
+.split div{height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.note{font-size:13px;color:var(--muted);margin-top:10px}
+.meter{position:relative;height:16px;border-radius:8px;background:var(--panel2);margin:14px 0 6px;overflow:hidden}
+.meter .used{position:absolute;inset:0 auto 0 0;background:var(--heat);border-radius:8px 0 0 8px}
+.meter .rest{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(135deg,#ff8a3d55 0 6px,#ff8a3d22 6px 12px)}
+.meter .mark{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--text);opacity:.7}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:14px;margin-top:10px}
+.kv span:nth-child(odd){color:var(--muted)}
+.chart{position:relative;margin-top:6px}
+.chart svg{display:block;width:100%;overflow:visible}
+.chart .tip{position:absolute;pointer-events:none;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:13px;white-space:nowrap;opacity:0;transition:opacity .1s;z-index:2}
+.chart .tip.show{opacity:1}
+.outlook{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:8px}
+.oday{background:var(--panel2);border-radius:12px;padding:10px;text-align:center}
+.oday .d{font-size:13px;color:var(--muted)}.oday .t{font-size:20px;margin:2px 0}.oday .k{font-size:14px}.oday .c{font-size:12px;color:var(--muted)}
+table.tbl{width:100%;border-collapse:collapse;font-size:14px}
+.tbl th{text-align:right;font-weight:500;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line)}
+.tbl td{text-align:right;padding:6px 8px;border-bottom:1px solid #ffffff0a}
+.tbl th:first-child,.tbl td:first-child{text-align:left}
+.up{color:var(--warn)}.down{color:var(--cool)}
+.hrs{display:grid;grid-template-columns:110px repeat(7,1fr) 64px;gap:4px 6px;align-items:end;font-size:13px}
+.hrs .h{color:var(--muted);text-align:center}
+.hrs .bar{height:44px;display:flex;align-items:flex-end;justify-content:center}
+.hrs .bar div{width:70%;max-width:26px;background:var(--heat);border-radius:4px 4px 1px 1px;min-height:1px}
+.hrs .bar div.unit{background:#ff8a3d55}
+.hrs .nm{align-self:center}.hrs .tot{align-self:center;text-align:right}
+.loading{color:var(--muted);padding:30px;text-align:center}
+.poweronly .tabs,.poweronly #presence{display:none}
+@media (max-width:420px){.stat .v{font-size:28px}.vline{font-size:19px}.hrs{grid-template-columns:76px repeat(7,1fr) 48px}}
 @media (max-width:420px){.big{font-size:48px}.days button{width:27px;height:28px}}
 </style>
 </head>
@@ -99,6 +144,7 @@ input[type=number]{width:70px}
   <div class="tabs" role="tablist">
     <button class="on" data-tab="rooms">Rooms</button>
     <button data-tab="schedule">Schedule</button>
+    <button data-tab="power">Power</button>
   </div>
 
   <section id="rooms" class="grid"></section>
@@ -133,6 +179,7 @@ input[type=number]{width:70px}
       <button class="btn primary" id="save">Save schedule</button>
     </div>
   </section>
+  <section id="power" class="hidden"><div class="card loading">Loading electricity data…</div></section>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -336,9 +383,190 @@ $('#save').onclick = async () => {
 };
 document.querySelectorAll('.tabs button').forEach((b) => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
-  $('#rooms').classList.toggle('hidden', b.dataset.tab !== 'rooms');
-  $('#schedule').classList.toggle('hidden', b.dataset.tab !== 'schedule');
+  for (const t of ['rooms', 'schedule', 'power']) $('#' + t).classList.toggle('hidden', b.dataset.tab !== t);
+  if (b.dataset.tab === 'power') loadPower();
+  history.replaceState(null, '', b.dataset.tab === 'rooms' ? location.pathname + location.search : '#' + b.dataset.tab);
 });
+// ----- Power tab -----
+let power = null, powerAt = 0, powerBusy = false;
+async function loadPower(force) {
+  if (powerBusy || (!force && power && Date.now() - powerAt < 60000)) return;
+  powerBusy = true;
+  try { power = await api('GET', '/api/power'); powerAt = Date.now(); renderPower(); }
+  catch (e) { $('#power').innerHTML = `<div class="card loading">Couldn’t load electricity data: ${esc(e.message)}</div>`; }
+  finally { powerBusy = false; }
+}
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pd = (d) => new Date(d + 'T12:00:00');
+const fday = (d, o = { weekday: 'short', month: 'short', day: 'numeric' }) => pd(d).toLocaleDateString([], o);
+const fmd = (d) => fday(d, { month: 'short', day: 'numeric' });
+const frange = (a, b) => a.slice(0, 7) === b.slice(0, 7) ? `${fmd(a)}–${pd(b).getDate()}` : `${fmd(a)} – ${fmd(b)}`;
+const n1 = (v) => v == null ? '–' : (Math.round(v * 10) / 10).toFixed(1);
+const n0 = (v) => v == null ? '–' : Math.round(v).toLocaleString();
+const money = (v, d = 0) => v == null ? '' : '$' + Number(v).toFixed(d);
+const sgn = (v) => (v > 0 ? '+' : v < 0 ? '−' : '±') + n1(Math.abs(v));
+const LEVEL = { expected: ['As expected', 'About what this weather calls for'],
+  above: ['A bit high', (p) => `${p}% above what this weather calls for`],
+  'well-above': ['High', (p) => `${p}% above what this weather calls for`],
+  below: ['Below expected', (p) => `${-p}% below what this weather calls for`] };
+function dayColor(d) {
+  if (!d.complete) return 'url(#partial)';
+  if (d.expected == null) return '#a69a8e88';
+  const r = d.kwh / d.expected;
+  return r >= 1.25 ? '#ff6b6bcc' : r >= 1.1 ? '#f2c14ecc' : r <= 0.9 ? '#5ab4ffaa' : '#7fd38a88';
+}
+
+function renderPower() {
+  const p = power, box = $('#power');
+  if (!p.ok) { box.innerHTML = `<div class="card loading">Electricity data isn’t available: ${esc(p.error)}</div>`; return; }
+  const v = p.verdict, b = p.bill, m = p.model, out = [];
+  if (p.stale) out.push(`<div class="err show">Showing data from ${new Date(p.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}; the latest update failed: ${esc(p.stale)}</div>`);
+  if (p.weatherError) out.push(`<div class="err show">Outdoor temperatures unavailable, so there’s no weather comparison: ${esc(p.weatherError)}</div>`);
+
+  // 1. this week against the weather
+  if (v) {
+    const L = v.level && LEVEL[v.level];
+    let html = `<div class="card"><p class="eyebrow">Last 7 days of data · ${frange(v.from, v.to)}</p>`;
+    html += L ? `<div class="verdict"><span class="badge ${v.level}">${L[0]}</span><span class="vline">${typeof L[1] === 'function' ? L[1](v.pct) : L[1]}</span></div>`
+              : `<div class="vline">${n1(v.actual)} kWh a day</div>`;
+    html += `<div class="stats">
+      <div class="stat"><div class="v">${n1(v.actual)}<small>kWh/day</small></div><div class="l">You used · avg ${n0(v.temp)}° outside</div></div>
+      ${v.expected != null ? `<div class="stat"><div class="v">${n1(v.expected)}<small>kWh/day</small></div><div class="l">Expected for that weather</div></div>` : ''}
+      ${v.usual != null ? `<div class="stat"><div class="v">${n1(v.usual)}<small>kWh/day</small></div><div class="l">Your usual · 8 weeks before, avg ${n0(v.usualTemp)}°</div></div>` : ''}
+    </div>`;
+    if (v.weatherEffect != null) {
+      const diff = v.actual - v.usual, w = v.weatherEffect, o = v.otherEffect;
+      const verb = diff >= 0 ? `Up ${n1(diff)}` : `Down ${n1(-diff)}`;
+      const wTxt = w >= 0 ? `colder weather accounts for <b>${sgn(w)}</b>` : `milder weather accounts for <b>${sgn(w)}</b>`;
+      const oTxt = Math.abs(o) < 0.3 ? 'and everything else is about the same' : o > 0 ? `and everything else for <b>${sgn(o)}</b>` : `and everything else was <b>${n1(-o)}</b> lower`;
+      html += `<div class="sched">${verb} kWh/day from your usual: ${wTxt} ${oTxt}.</div>`;
+      if (w >= 0 && o >= 0 && v.actual > 0) {
+        const pc = (x) => (x / v.actual * 100).toFixed(1) + '%';
+        html += `<div class="split"><div style="width:${pc(v.usual)};background:#a69a8e66"></div><div style="width:${pc(w)};background:var(--cool)"></div><div style="width:${pc(o)};background:var(--heat)"></div></div>
+          <div class="legend"><span><i style="background:#a69a8e66"></i>Usual ${n1(v.usual)}</span><span><i style="background:var(--cool)"></i>Colder weather ${sgn(w)}</span><span><i style="background:var(--heat)"></i>Everything else ${sgn(o)}</span></div>`;
+      }
+    }
+    if (m && m.includesThisWeek) html += `<div class="note">There are only ${m.coldDays} cold days (50° or below) to learn from so far, and they include this week, so treat this comparison as rough until more cold weather comes in.</div>`;
+    html += `<div class="note">ComEd’s data runs a day or two behind.</div></div>`;
+    out.push(html);
+  }
+
+  // 2. this bill
+  if (b) {
+    const scale = Math.max(b.projected || 0, b.comedForecast || 0, b.used) * 1.04 || 1;
+    const pct = (x) => Math.min(100, x / scale * 100).toFixed(1) + '%';
+    let html = `<div class="card"><p class="eyebrow">This bill${b.start && b.end ? ` · ${frange(b.start, b.end)}${b.endEstimated ? ' (end estimated)' : ''}` : ''}</p>
+      <div class="stats" style="margin-top:4px">
+        <div class="stat"><div class="v">${n0(b.used)}<small>kWh</small></div><div class="l">So far${b.cost != null ? ' · ' + money(b.cost, 2) : ''}</div></div>
+        ${b.projected != null ? `<div class="stat"><div class="v">${n0(b.projected)}<small>kWh</small></div><div class="l">Heading for, at the forecast weather${b.projectedCost != null ? ' · ~' + money(b.projectedCost) : ''}</div></div>` : ''}
+      </div>
+      <div class="meter"><div class="used" style="width:${pct(b.used)}"></div>${b.projected != null ? `<div class="rest" style="left:${pct(b.used)};width:calc(${pct(b.projected)} - ${pct(b.used)})"></div>` : ''}${b.comedForecast ? `<div class="mark" style="left:${pct(b.comedForecast)}" title="ComEd’s forecast"></div>` : ''}</div>
+      <div class="legend"><span><i style="background:var(--heat)"></i>Used</span>${b.projected != null ? '<span><i style="background:#ff8a3d55"></i>Expected for the rest of the bill</span>' : ''}${b.comedForecast ? '<span><i style="background:var(--text);width:3px"></i>ComEd’s forecast</span>' : ''}</div>
+      <div class="kv">`;
+    if (b.comedForecast) html += `<span>ComEd’s forecast</span><span>${n0(b.comedForecast)} kWh${b.comedForecastCost ? ' · ' + money(b.comedForecastCost) : ''} <span class="muted">(from your use so far; it doesn’t know the weather forecast)</span></span>`;
+    if (b.daysLeft != null) html += `<span>Days left</span><span>${b.daysLeft}</span>`;
+    if (b.budget) html += `<span>Monthly budget</span><span>${n0(b.budget)} kWh${b.projected != null ? ` <span class="${b.projected > b.budget ? 'up' : 'down'}">(${b.projected > b.budget ? n0(b.projected - b.budget) + ' over' : n0(b.budget - b.projected) + ' under'})</span>` : ''}</span>`;
+    if (b.rate) html += `<span>Your rate so far</span><span>${money(b.rate * 100, 1).replace('$', '')}¢ per kWh <span class="muted">(usage charges; fixed charges are extra)</span></span>`;
+    if (b.restDays) html += `<span>Weather used</span><span>${b.restDays - b.forecastDays - b.lastYearDays ? (b.restDays - b.forecastDays - b.lastYearDays) + ' recent days, ' : ''}${b.forecastDays} forecast days${b.lastYearDays ? `, ${b.lastYearDays} at last year’s temperatures` : ''}</span>`;
+    out.push(html + '</div></div>');
+  }
+
+  // 3. daily chart
+  if (p.daily && p.daily.length) out.push(`<div class="card"><p class="eyebrow">Daily use · last ${p.daily.length} days</p>
+    <div class="legend"><span><i style="background:#7fd38a88"></i>Within 10% of expected</span><span><i style="background:#f2c14ecc"></i>10–25% over</span><span><i style="background:#ff6b6bcc"></i>25%+ over</span><span><i style="background:#5ab4ffaa"></i>10%+ under</span><span><i style="background:var(--text);height:3px;vertical-align:3px"></i>Expected for that day’s weather</span><span><i style="background:var(--cool);height:2px;vertical-align:4px"></i>Outside avg °F (colder ↑)</span></div>
+    <div class="chart" id="pchart"><div class="tip"></div></div></div>`);
+
+  // 4. the week ahead + 5. heating hours
+  const row = [];
+  if (p.outlook && p.outlook.length) row.push(`<div class="card"><p class="eyebrow">The next 7 days at the forecast</p><div class="outlook">${p.outlook.map((o, i) =>
+    `<div class="oday"><div class="d">${i === 0 ? 'Today' : fday(o.date, { weekday: 'short' })}</div><div class="t">${n0(o.temp)}°</div><div class="k">${n1(o.kwh)} kWh</div><div class="c">${o.cost != null ? money(o.cost, 2) : ''}</div></div>`).join('')}</div>
+    <div class="note">Expected use for each day’s average temperature. Total: ${n0(p.outlook.reduce((a, o) => a + o.kwh, 0))} kWh${p.outlook[0].cost != null ? ' · ' + money(p.outlook.reduce((a, o) => a + o.cost, 0)) : ''}.</div></div>`);
+  const h = p.heating;
+  if (h && h.rooms.length) {
+    const max = Math.max(1, ...h.rooms.flatMap((r) => r.hours.map((x, i) => x + r.unitHours[i])));
+    const any = h.rooms.some((r) => r.hours.some((x) => x) || r.unitHours.some((x) => x));
+    let html = `<div class="card"><p class="eyebrow">Heating hours by room · last 7 days</p><div class="hrs"><span></span>${h.dates.map((d, i) => `<span class="h">${i === 6 ? 'Today' : fday(d, { weekday: 'narrow' })}</span>`).join('')}<span class="h" style="text-align:right">Total</span>`;
+    for (const r of h.rooms) {
+      html += `<span class="nm">${esc(r.name)}</span>` + r.hours.map((x, i) => {
+        const u = r.unitHours[i];
+        return `<span class="bar" title="${fmd(h.dates[i])}: ${n1(x + u)} h"><div style="display:flex;flex-direction:column;width:70%;max-width:26px"><div class="unit" style="width:100%;height:${u / max * 44}px;border-radius:4px 4px 0 0"></div><div style="width:100%;height:${x / max * 44}px;${u ? 'border-radius:0' : ''}"></div></div></span>`;
+      }).join('') + `<span class="tot">${n1(r.hours.reduce((a, x) => a + x, 0) + r.unitHours.reduce((a, x) => a + x, 0))} h</span>`;
+    }
+    html += `</div><div class="note">${any ? 'Time each unit was running to heat (or cool), as decided by the room sensors' + (h.rooms.some((r) => r.unitHours.some((x) => x)) ? '; the lighter part is time the unit’s own thermostat was in charge, so it may have been idle for some of it' : '') + '.' : 'Nothing recorded yet.'} Counting started ${h.since ? fmd(h.since) : 'with this update'}.</div></div>`;
+    row.push(html);
+  }
+  if (row.length) out.push(`<div class="two">${row.join('')}</div>`);
+
+  // 6. what to expect by temperature + 7. months
+  const row2 = [];
+  if (m) {
+    const parts = [`about <b>${n1(m.base)} kWh a day</b> for everything besides heating and cooling`];
+    if (m.heatSlope) parts.push(`plus <b>${m.heatSlope} kWh</b> for each degree the day’s average falls below <b>${m.balance}°</b>`);
+    if (m.coolSlope) parts.push(`and <b>${m.coolSlope} kWh</b> for each degree above <b>${m.coolBalance}°</b> for cooling`);
+    row2.push(`<div class="card"><p class="eyebrow">What to expect by outdoor temperature</p>
+      <div class="sched" style="color:var(--text)">Your apartment uses ${parts.join(', ')}.</div>
+      <table class="tbl" style="margin-top:12px"><tr><th>Outside avg</th><th>kWh / day</th><th>Per day</th><th>Per 30 days</th></tr>
+      ${p.guide.map((g) => `<tr><td>${g.temp}°</td><td>${n1(g.kwh)}</td><td>${g.cost != null ? money(g.cost, 2) : '–'}</td><td>${g.cost != null ? money(g.cost * 30) : '–'}</td></tr>`).join('')}</table>
+      <div class="note">Learned from ${m.trainDays} days (${frange(m.from, m.to)}), with recent weeks counting most, so it adapts to changes like the new schedule. It explains ${Math.round((m.r2 || 0) * 100)}% of the day-to-day ups and downs; a typical day lands within about ${n1(m.sigma)} kWh of its expected value. Costs use your rate so far and leave out fixed charges.</div></div>`);
+  }
+  if (p.months && p.months.length) {
+    row2.push(`<div class="card"><p class="eyebrow">By month</p><table class="tbl"><tr><th>Month</th><th>kWh</th><th>Expected</th><th>Difference</th><th>Avg temp</th></tr>
+      ${p.months.slice().reverse().map((x) => {
+        const d = x.expected ? Math.round((x.kwh / x.expected - 1) * 100) : null;
+        return `<tr><td>${pd(x.month + '-15').toLocaleDateString([], { month: 'short', year: 'numeric' })}${x.partial ? ` <span class="muted">(${x.days} days)</span>` : ''}</td><td>${n0(x.kwh)}</td><td>${x.expected != null ? n0(x.expected) : '–'}</td>
+          <td class="${d == null ? '' : d >= 10 ? 'up' : d <= -10 ? 'down' : ''}">${d == null ? '–' : (d > 0 ? '+' : d < 0 ? '−' : '±') + Math.abs(d) + '%'}</td><td>${n0(x.temp)}°</td></tr>`;
+      }).join('')}</table>
+      <div class="note">Calendar months of finished days. “Expected” is what the weather model predicts for that month’s actual temperatures.</div></div>`);
+  }
+  if (row2.length) out.push(`<div class="two">${row2.join('')}</div>`);
+
+  box.innerHTML = out.join('') || '<div class="card loading">No electricity data yet.</div>';
+  if (p.daily && p.daily.length) drawChart($('#pchart'), p.daily);
+}
+
+function drawChart(el, days) {
+  const W = Math.max(300, el.clientWidth), H = W < 560 ? 240 : 290;
+  const L = 36, R = 8, T = 10, B = 24, n = days.length, bw = (W - L - R) / n;
+  const ymax = Math.max(1, ...days.map((d) => Math.max(d.kwh, d.expected || 0))) * 1.08;
+  const y = (k) => H - B - k / ymax * (H - T - B - 70); // top 70px kept for the temperature line
+  const temps = days.map((d) => d.temp).filter((t) => t != null);
+  const tmin = Math.min(...temps), tmax = Math.max(...temps), ty = (t) => T + 14 + (tmax === tmin ? 0.5 : (t - tmin) / (tmax - tmin)) * 56; // colder = higher
+  const step = ymax > 40 ? 20 : ymax > 16 ? 10 : 5;
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs><pattern id="partial" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="3" height="6" fill="#a69a8e55"/></pattern></defs>`;
+  for (let k = step; k < ymax; k += step) svg += `<line x1="${L}" x2="${W - R}" y1="${y(k)}" y2="${y(k)}" stroke="#ffffff10"/><text x="${L - 6}" y="${y(k) + 4}" fill="#a69a8e" font-size="11" text-anchor="end">${k}</text>`;
+  svg += `<text x="${L - 6}" y="${y(0) + 4}" fill="#a69a8e" font-size="11" text-anchor="end">0</text>`;
+  const every = bw >= 22 ? 1 : bw >= 12 ? 2 : 4;
+  days.forEach((d, i) => {
+    const x = L + i * bw, w = Math.max(2, bw * 0.74), bx = x + (bw - w) / 2;
+    svg += `<rect x="${bx}" y="${y(d.kwh)}" width="${w}" height="${Math.max(1, y(0) - y(d.kwh))}" rx="2" fill="${dayColor(d)}"/>`;
+    if (d.expected != null) svg += `<line x1="${bx - 1}" x2="${bx + w + 1}" y1="${y(d.expected)}" y2="${y(d.expected)}" stroke="#f3ece4" stroke-width="2.2" opacity=".9"/>`;
+    const wd = pd(d.date).getDay();
+    if (bw >= 14) svg += `<text x="${x + bw / 2}" y="${H - 7}" fill="${wd === 0 ? '#f3ece4' : '#a69a8e'}" font-size="11" text-anchor="middle">${fday(d.date, { weekday: 'narrow' })}</text>`;
+    else if (wd === 0) svg += `<text x="${x + bw / 2}" y="${H - 7}" fill="#a69a8e" font-size="10" text-anchor="middle">${fmd(d.date)}</text>`;
+  });
+  const pts = days.map((d, i) => d.temp == null ? null : [L + i * bw + bw / 2, ty(d.temp), d.temp, i]).filter(Boolean);
+  if (pts.length) {
+    svg += `<polyline points="${pts.map((q) => q[0].toFixed(1) + ',' + q[1].toFixed(1)).join(' ')}" fill="none" stroke="#5ab4ff" stroke-width="2" stroke-linejoin="round"/>`;
+    pts.forEach((q) => { if (q[3] % every === 0 || q[3] === n - 1) svg += `<circle cx="${q[0]}" cy="${q[1]}" r="2.5" fill="#5ab4ff"/><text x="${q[0]}" y="${q[1] - 7}" fill="#5ab4ff" font-size="11" text-anchor="middle">${Math.round(q[2])}°</text>`; });
+  }
+  days.forEach((d, i) => { svg += `<rect class="hit" data-i="${i}" x="${L + i * bw}" y="${T}" width="${bw}" height="${H - T - B}" fill="transparent"/>`; });
+  el.querySelector('svg')?.remove();
+  el.insertAdjacentHTML('beforeend', svg + '</svg>');
+  const tip = el.querySelector('.tip');
+  const show = (e) => {
+    const r = e.target.closest('.hit'); if (!r) return tip.classList.remove('show');
+    const d = days[r.dataset.i], diff = d.expected ? Math.round((d.kwh / d.expected - 1) * 100) : null;
+    tip.innerHTML = `<b>${fday(d.date)}</b><br>${d.complete ? `Used <b>${n1(d.kwh)} kWh</b>` : `${n1(d.kwh)} kWh so far <span class="muted">(ComEd hasn’t sent the whole day yet)</span>`}` +
+      (d.expected != null ? `<br>Expected <b>${n1(d.expected)} kWh</b>${d.complete && diff != null ? ` <span class="${diff >= 10 ? 'up' : diff <= -10 ? 'down' : ''}">(${diff >= 0 ? '+' : '−'}${Math.abs(diff)}%)</span>` : ''}` : '') +
+      (d.temp != null ? `<br>Outside avg ${n0(d.temp)}°` : '');
+    const bx = Number(r.getAttribute('x')) + bw / 2;
+    tip.style.left = Math.min(Math.max(0, bx - 90), W - 200) + 'px'; tip.style.top = '0px'; tip.classList.add('show');
+  };
+  const svgEl = el.querySelector('svg');
+  svgEl.addEventListener('mousemove', show); svgEl.addEventListener('click', show);
+  svgEl.addEventListener('mouseleave', () => tip.classList.remove('show'));
+}
+
 const EMBED = new URLSearchParams(location.search).has('embed');
 if (EMBED) {
   document.documentElement.classList.add('embed');
@@ -346,7 +574,12 @@ if (EMBED) {
   document.addEventListener('pointerdown', () => parent !== window && parent.postMessage({ thermostat: 'touch' }, '*'));
   $('#back').onclick = () => { location.href = '/kiosk?embed=1'; };
 }
-if (location.hash === '#schedule') document.querySelector('.tabs [data-tab=schedule]').click();
+const POWER_ONLY = location.pathname === '/power';
+if (POWER_ONLY) document.documentElement.classList.add('poweronly');
+if (POWER_ONLY || location.hash === '#power') document.querySelector('.tabs [data-tab=power]').click();
+else if (location.hash === '#schedule') document.querySelector('.tabs [data-tab=schedule]').click();
+setInterval(() => { if (!$('#power').classList.contains('hidden')) loadPower(); }, 10 * 60000);
+let resizeT; addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => power && renderPower(), 150); });
 refresh(); setInterval(() => { if (!Object.keys(pending).length) refresh(); }, 15000);
 </script>
 </body>
