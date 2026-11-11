@@ -27,6 +27,18 @@ const BOOST = Math.max(0, Math.min(6, /^\d+(\.\d+)?$/.test(process.env.BOOST_DEG
 // avoids cold restarts but only works if the unit's own sensor reads above 61° (these read cold at the wall).
 const IDLE_OFF = process.env.IDLE_MODE !== 'heat';
 const idleCmd = (cool) => (IDLE_OFF ? { hvac: 'off' } : cool ? { hvac: 'cool', temp: 86 } : { hvac: 'heat', temp: 61 });
+// Gentle warm-up. These units bring on the electric strips (about 4x the heat pump's power) when their own
+// sensor is ~4° or more below the setpoint (tested Nov 11 2026: +2-3° stayed on the heat pump, +4-5°
+// switched to strips after a few minutes). Their sensors read about UNIT_SENSOR_OFFSET below the room
+// sensor, so a running unit's setpoint is capped at room - offset + MAX_SETPOINT_GAP and raised in steps
+// (at most once every STEP_MINUTES) as the room warms, instead of jumping straight to the target.
+const envNum = (k, d) => (/^-?\d+(\.\d+)?$/.test(process.env[k] || '') ? Number(process.env[k]) : d);
+const UNIT_OFFSET = envNum('UNIT_SENSOR_OFFSET', 4);
+const MAX_GAP = envNum('MAX_SETPOINT_GAP', 3);
+const STEP_MS = envNum('STEP_MINUTES', 5) * 60000;
+const GENTLE = process.env.GENTLE_WARMUP !== 'off';
+// Setpoints whose IR code the units misread (69°F came out as 68°F); stepped past downward when heating.
+const SKIP_TEMPS = (process.env.SKIP_TEMPS ?? '69').split(',').map(Number).filter(Number.isFinite);
 const PUBLIC = path.join(__dirname, 'public');
 const OLD_AUTOMATION_ID = 'amana_heat_schedule';
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -209,6 +221,10 @@ function findHumidity(room) {
 const num = (s) => (s && s.state !== 'unavailable' && s.state !== 'unknown' && Number.isFinite(Number(s.state)) ? Number(s.state) : null);
 
 async function sendToRoom(room, d) {
+  if (d.hvac !== 'off' && SKIP_TEMPS.includes(d.temp)) {
+    let t = d.temp; while (SKIP_TEMPS.includes(t)) t += d.hvac === 'cool' ? 1 : -1;
+    d = { ...d, temp: t };
+  }
   if (d.hvac === 'off') {
     await ha('POST', '/api/services/climate/set_hvac_mode', { entity_id: room.climate, hvac_mode: 'off' });
   } else {
@@ -257,9 +273,28 @@ function command(room) {
   if (r.running == null) r.running = cool ? t > r.target : t < r.target;
   else if (!r.running && wantOn && canSwitch) r.running = true;
   else if (r.running && wantOff && canSwitch) r.running = false;
-  if (!r.running) return idleCmd(cool);
-  return cool ? { hvac: 'cool', temp: Math.max(64, r.target - BOOST) }
-              : { hvac: 'heat', temp: Math.min(80, r.target + BOOST) };
+  if (!r.running) { r.stage = null; return idleCmd(cool); }
+  if (cool) return { hvac: 'cool', temp: Math.max(64, r.target - BOOST) };
+  return { hvac: 'heat', temp: GENTLE ? stagedHeat(r, t) : Math.min(80, r.target + BOOST) };
+}
+// Heat setpoint for a running unit: the target (+BOOST), but never more than MAX_GAP above where the unit's own
+// sensor probably reads. Steps up at most every STEP_MS; if the room hasn't warmed in two steps' time (the unit
+// isn't running because its sensor reads higher than estimated), it goes up 1° anyway.
+function stagedHeat(r, t) {
+  const want = Math.min(80, r.target + BOOST);
+  const x = t - UNIT_OFFSET + MAX_GAP;            // highest setpoint that keeps the gap under the strip threshold
+  const st = r.stage;
+  const now = Date.now();
+  let s;
+  if (!st) s = Math.floor(x);
+  else if (st.temp > x + 0.5 && t < st.room - 0.3) s = Math.floor(x);   // room cooled: gap got too big, come down now
+  else if (now - st.at < STEP_MS) s = st.temp;
+  else if (Math.floor(x) > st.temp) s = Math.floor(x);
+  else if (now - st.at >= 2 * STEP_MS && t <= st.room + 0.2) s = st.temp + 1;
+  else s = st.temp;
+  s = Math.max(61, Math.min(want, s));
+  if (!st || s !== st.temp) r.stage = { temp: s, at: now, room: t };
+  return s;
 }
 async function controlRoom(room) {
   if (!states[room.climate] || states[room.climate].state === 'unavailable') return false;
@@ -273,6 +308,7 @@ async function controlRoom(room) {
   saveRuntime();
   const t = num(states[room.tempSensor]);
   console.log(new Date().toISOString(), `${room.name}: ${r.hvac} ${r.target ?? ''} -> unit ${cmd.hvac} ${cmd.temp ?? ''}` +
+    (r.stage && cmd.hvac === 'heat' && cmd.temp < Math.min(80, r.target + BOOST) ? ' [warming up gently]' : '') +
     (t != null ? ` (room ${t}°)` : ''));
   return true;
 }

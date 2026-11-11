@@ -25,7 +25,16 @@ runs instead of the unit's own thermostat, which reads cold air at the wall. Wit
 room set to T heats when it drops to T − B/2 and stops at T + B/2. A running unit is sent T + 1°
 (`BOOST_DEGREES` in `.env`) so its own thermostat doesn't stop it early; a stopped unit is switched off.
 The small push is to keep the units on their heat pump: with T + 4° the electric strips came on a lot
-(Nov 2026: about twice the energy per degree of cold). `IDLE_MODE=heat` would idle units in Heat at 61°
+(Nov 2026: about twice the energy per degree of cold).
+
+**Gentle warm-up (default on, `GENTLE_WARMUP=off` to disable).** Tested Nov 11 2026 on the office unit
+(56° outside): the units switch from heat pump to electric strips when their own sensor is ~4° below the
+setpoint, and their sensor reads ~3–4° below the room sensor. So a running unit's heat setpoint is capped at
+room − `UNIT_SENSOR_OFFSET` (4) + `MAX_SETPOINT_GAP` (3), i.e. about 1° below the room, and raised as the room
+warms, at most every `STEP_MINUTES` (5). Each step is one beep. If the room hasn't warmed in 10 minutes the
+setpoint goes up 1° anyway (the unit's sensor read higher than estimated). The Rooms tab shows
+"Heating to 70° · step 67°" while this is happening. `SKIP_TEMPS` (default `69`): setpoints whose IR code
+the units misread (69°F came out as 68°F); heat setpoints step past them downward. `IDLE_MODE=heat` would idle units in Heat at 61°
 instead of off, but the units' own sensors read below 61° at the wall, so they'd keep running. Units never switch on/off more than once
 every 5 minutes (`MIN_SWITCH_MINUTES` in `.env` to change). If a room's sensor is unavailable, that
 unit falls back to its own thermostat at the set temperature. Runtime state is kept in `data/state.json`.

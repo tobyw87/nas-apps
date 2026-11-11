@@ -251,6 +251,8 @@ function statusText(c, tgt) {
   if (c.hvac === 'off') return 'Off';
   const cool = c.hvac === 'cool';
   if (c.running === false) return `Idle · ${tgt}°`;
+  // warming up gently: the unit is held a few degrees below the target so it stays on its heat pump
+  if (!cool && c.running && c.unit && c.unit.hvac === 'heat' && c.unit.target != null && c.unit.target < tgt) return `Heating to ${tgt}° · step ${c.unit.target}°`;
   return (cool ? 'Cooling to ' : 'Heating to ') + tgt + '°';
 }
 function stripRoom(r) { const { current, scheduled, next, humiditySensorUsed, ...rest } = r; return rest; }
