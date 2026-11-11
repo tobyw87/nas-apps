@@ -22,8 +22,11 @@ Logs: `cd /volume1/docker/thermostat && sudo docker compose logs --tail 50 therm
 
 With **Use room sensors** on (Schedule tab → General), the Govee room sensors decide when each unit
 runs instead of the unit's own thermostat, which reads cold air at the wall. With a buffer of B°, a
-room set to T heats when it drops to T − B/2 and switches the unit off at T + B/2; a running unit is
-sent T + 4° so its own thermostat doesn't stop it early. Units never switch on/off more than once
+room set to T heats when it drops to T − B/2 and stops at T + B/2. A running unit is sent T + 1°
+(`BOOST_DEGREES` in `.env`) so its own thermostat doesn't stop it early; a stopped unit stays in Heat at
+61° (Cool at 86°) and idles, rather than being switched off (`IDLE_MODE=off` in `.env` to switch off
+instead). Both keep the units on their heat pump: a large setpoint gap, or a cold start, brings on the
+electric strips, which in Nov 2026 doubled the energy per degree of cold. Units never switch on/off more than once
 every 5 minutes (`MIN_SWITCH_MINUTES` in `.env` to change). If a room's sensor is unavailable, that
 unit falls back to its own thermostat at the set temperature. Runtime state is kept in `data/state.json`.
 

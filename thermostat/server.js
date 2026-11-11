@@ -3,8 +3,8 @@
 // (kept server-side). The schedule lives here (data/config.json) and is applied through HA's
 // SmartIR climate entities; the old HA schedule automation is switched off on startup.
 // With sensor control on, the room sensors decide when each unit runs: the unit gets Heat (with a
-// setpoint a few degrees above the target so its own thermostat doesn't stop it early) when the room
-// drops half the buffer below the target, and Off once the room is half the buffer above it.
+// setpoint a degree above the target so its own thermostat doesn't stop it early) when the room drops
+// half the buffer below the target, and idles (Heat at 61°) once the room is half the buffer above it.
 'use strict';
 const http = require('http');
 const fs = require('fs');
@@ -20,7 +20,13 @@ const DATA_DIR = process.env.DATA_DIR || '/data';
 const CONFIG = path.join(DATA_DIR, 'config.json');
 const RUNTIME = path.join(DATA_DIR, 'state.json');
 const MIN_SWITCH_MS = (Number(process.env.MIN_SWITCH_MINUTES) || 5) * 60000; // never switch a unit on/off more often than this
-const BOOST = 4;                  // degrees past the target sent to a running unit
+// Degrees past the target sent to a running unit. Kept small: a big gap between a unit's setpoint and
+// the room makes these heat pumps bring on their electric strips (about 4x the power of the heat pump).
+const BOOST = Math.max(0, Math.min(6, /^\d+(\.\d+)?$/.test(process.env.BOOST_DEGREES || '') ? Number(process.env.BOOST_DEGREES) : 1));
+// Between runs a unit stays in Heat (or Cool) at the lowest (highest) setpoint so it idles on its own
+// thermostat, instead of being switched off and cold-started each time. IDLE_MODE=off restores switching off.
+const IDLE_OFF = process.env.IDLE_MODE === 'off';
+const idleCmd = (cool) => (IDLE_OFF ? { hvac: 'off' } : cool ? { hvac: 'cool', temp: 86 } : { hvac: 'heat', temp: 61 });
 const PUBLIC = path.join(__dirname, 'public');
 const OLD_AUTOMATION_ID = 'amana_heat_schedule';
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -251,7 +257,7 @@ function command(room) {
   if (r.running == null) r.running = cool ? t > r.target : t < r.target;
   else if (!r.running && wantOn && canSwitch) r.running = true;
   else if (r.running && wantOff && canSwitch) r.running = false;
-  if (!r.running) return { hvac: 'off' };
+  if (!r.running) return idleCmd(cool);
   return cool ? { hvac: 'cool', temp: Math.max(64, r.target - BOOST) }
               : { hvac: 'heat', temp: Math.min(80, r.target + BOOST) };
 }
