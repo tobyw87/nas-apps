@@ -4,7 +4,7 @@
 // SmartIR climate entities; the old HA schedule automation is switched off on startup.
 // With sensor control on, the room sensors decide when each unit runs: the unit gets Heat (with a
 // setpoint a degree above the target so its own thermostat doesn't stop it early) when the room drops
-// half the buffer below the target, and idles (Heat at 61°) once the room is half the buffer above it.
+// half the buffer below the target, and Off once the room is half the buffer above it.
 'use strict';
 const http = require('http');
 const fs = require('fs');
@@ -23,9 +23,9 @@ const MIN_SWITCH_MS = (Number(process.env.MIN_SWITCH_MINUTES) || 5) * 60000; // 
 // Degrees past the target sent to a running unit. Kept small: a big gap between a unit's setpoint and
 // the room makes these heat pumps bring on their electric strips (about 4x the power of the heat pump).
 const BOOST = Math.max(0, Math.min(6, /^\d+(\.\d+)?$/.test(process.env.BOOST_DEGREES || '') ? Number(process.env.BOOST_DEGREES) : 1));
-// Between runs a unit stays in Heat (or Cool) at the lowest (highest) setpoint so it idles on its own
-// thermostat, instead of being switched off and cold-started each time. IDLE_MODE=off restores switching off.
-const IDLE_OFF = process.env.IDLE_MODE === 'off';
+// Between runs a unit is switched off. IDLE_MODE=heat keeps it in Heat at 61° (Cool at 86°) instead, which
+// avoids cold restarts but only works if the unit's own sensor reads above 61° (these read cold at the wall).
+const IDLE_OFF = process.env.IDLE_MODE !== 'heat';
 const idleCmd = (cool) => (IDLE_OFF ? { hvac: 'off' } : cool ? { hvac: 'cool', temp: 86 } : { hvac: 'heat', temp: 61 });
 const PUBLIC = path.join(__dirname, 'public');
 const OLD_AUTOMATION_ID = 'amana_heat_schedule';
