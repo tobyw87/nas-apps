@@ -27,7 +27,8 @@ room set to T heats when it drops to T − B/2 and stops at T + B/2. A running u
 The small push is to keep the units on their heat pump: with T + 4° the electric strips came on a lot
 (Nov 2026: about twice the energy per degree of cold).
 
-**Gentle warm-up (default on, `GENTLE_WARMUP=off` to disable).** Tested Nov 11 2026 on the office unit
+**Gentle warm-up (default on, `GENTLE_WARMUP=off` to disable)** — for scheduled temperatures only; a
+temperature set by hand on the page or the kiosk goes straight to the unit (target + 1°). Tested Nov 11 2026 on the office unit
 (56° outside): the units switch from heat pump to electric strips when their own sensor is ~4° below the
 setpoint, and their sensor reads ~3–4° below the room sensor. So a running unit's heat setpoint is capped at
 room − `UNIT_SENSOR_OFFSET` (4) + `MAX_SETPOINT_GAP` (3), i.e. about 1° below the room, and raised as the room

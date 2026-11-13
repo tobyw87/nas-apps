@@ -251,9 +251,12 @@ function roomRt(room) {
   }
   return rt[room.id];
 }
-function setSetting(room, hvac, target) {
+// source: 'schedule' or 'manual' (set from the page, the kiosk or the app's API). Manual settings skip the
+// gentle warm-up and go straight to the target; scheduled ones warm up in steps.
+function setSetting(room, hvac, target, source = 'schedule') {
   const r = roomRt(room);
-  if (r.hvac !== hvac || r.target !== target) { r.hvac = hvac; r.target = target; r.lastSwitch = 0; r.running = null; }
+  if (r.hvac !== hvac || r.target !== target) { r.hvac = hvac; r.target = target; r.lastSwitch = 0; r.running = null; r.stage = null; }
+  r.manual = source === 'manual';
 }
 
 // What to send the unit now, given the setting and the room sensor.
@@ -275,7 +278,7 @@ function command(room) {
   else if (r.running && wantOff && canSwitch) r.running = false;
   if (!r.running) { r.stage = null; return idleCmd(cool); }
   if (cool) return { hvac: 'cool', temp: Math.max(64, r.target - BOOST) };
-  return { hvac: 'heat', temp: GENTLE ? stagedHeat(r, t) : Math.min(80, r.target + BOOST) };
+  return { hvac: 'heat', temp: GENTLE && !r.manual ? stagedHeat(r, t) : Math.min(80, r.target + BOOST) };
 }
 // Heat setpoint for a running unit: the target (+BOOST), but never more than MAX_GAP above where the unit's own
 // sensor probably reads. Steps up at most every STEP_MS; if the room hasn't warmed in two steps' time (the unit
@@ -437,10 +440,10 @@ http.createServer(async (req, res) => {
       if (!room) return send(res, 404, { error: 'no such room' });
       const b = await readBody(req);
       const cur = roomRt(room);
-      if (b.hvac === 'off') setSetting(room, 'off', cur.target);
+      if (b.hvac === 'off') setSetting(room, 'off', cur.target, 'manual');
       else {
         const hvac = b.hvac === 'cool' || b.hvac === 'heat' ? b.hvac : (cur.hvac === 'cool' ? 'cool' : config.mode);
-        setSetting(room, hvac, clampTemp(b.temp ?? cur.target ?? 70));
+        setSetting(room, hvac, clampTemp(b.temp ?? cur.target ?? 70), 'manual');
       }
       saveRuntime();
       await controlRoom(room);
