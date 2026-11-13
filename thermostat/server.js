@@ -37,6 +37,10 @@ const UNIT_OFFSET = envNum('UNIT_SENSOR_OFFSET', 4);
 const MAX_GAP = envNum('MAX_SETPOINT_GAP', 3);
 const STEP_MS = envNum('STEP_MINUTES', 5) * 60000;
 const GENTLE = process.env.GENTLE_WARMUP !== 'off';
+// Warm-ups slower than this (°F/hour) push the setpoint up 1° every 2 × STEP_MINUTES.
+const SLOW_RATE = envNum('SLOW_WARMUP_RATE', 1.5);
+// Pre-heat: until a room has learned its own warm-up rate, assume this (°F/hour; Nov 13 office at 40° outside: 1.3–2.3).
+const DEFAULT_RATE = envNum('DEFAULT_WARMUP_RATE', 1.5);
 // Setpoints whose IR code the units misread (69°F came out as 68°F); stepped past downward when heating.
 const SKIP_TEMPS = (process.env.SKIP_TEMPS ?? '69').split(',').map(Number).filter(Number.isFinite);
 const PUBLIC = path.join(__dirname, 'public');
@@ -51,6 +55,9 @@ const DEFAULT_CONFIG = {
   // Sleep hours: the quiet room's unit stays off; the helper rooms' units heat the house whenever the quiet
   // room's sensor drops below keepAt (helper rooms themselves go no higher than helperMax).
   sleep: { enabled: true, start: '23:00', end: '09:00', days: ALL_DAYS, quietRoom: 'bedroom', helpers: ['living'], keepAt: 60, helperMax: 68 },
+  // Pre-heat: start a scheduled warm-up early enough (from the room's learned warm-up rate) to be at the
+  // block's temperature when it starts; never more than maxHours early.
+  preheat: { enabled: true, maxHours: 4 },
   rooms: [
     { id: 'office', name: 'Office', climate: 'climate.office_heat',
       tempSensor: 'sensor.office_temperature_calibrated', humiditySensor: '',
@@ -92,6 +99,10 @@ function validate(c) {
       buffer: Math.max(1, Math.min(8, Math.round(Number((c.sensorControl && c.sensorControl.buffer) || 3) * 2) / 2)),
     },
     sleep: null,
+    preheat: {
+      enabled: !c.preheat || c.preheat.enabled !== false,
+      maxHours: Math.max(0.5, Math.min(8, Math.round(Number((c.preheat && c.preheat.maxHours) || 4) * 2) / 2)),
+    },
     rooms: [],
   };
   const sl = c.sleep || DEFAULT_CONFIG.sleep;
@@ -161,6 +172,28 @@ function updateHelp() {
                                              : `Sleep hours: ${sl.quietRoom} warm enough, helpers back to their own settings`);
     saveRuntime();
   }
+}
+
+// Pre-heat: if the next scheduled change raises the heat, switch to it early enough to arrive on time.
+// Once started, a pre-heat holds until that block begins (r.preheatFor = its start time).
+function withPreheat(room, r, d, home) {
+  const now = Date.now();
+  if (r.preheatFor && r.preheatFor <= now) r.preheatFor = null;
+  if (!config.preheat.enabled || !config.sensorControl.enabled || !d || d.hvac !== 'heat') { r.preheatFor = null; return d; }
+  const nx = nextChange(room, home);
+  if (!nx || !nx.desired || nx.desired.hvac !== 'heat' || nx.desired.temp <= d.temp) { r.preheatFor = null; return d; }
+  const at = Date.parse(nx.at);
+  if (r.preheatFor === at) return { ...nx.desired, reason: 'preheat' };
+  const t = num(states[room.tempSensor]);
+  if (t == null) return d;
+  const rate = r.rate || DEFAULT_RATE;
+  const leadH = Math.min(config.preheat.maxHours, Math.max(0, nx.desired.temp - t) / rate + 0.25);
+  if (at - now > leadH * 3600e3) return d;
+  r.preheatFor = at;
+  r.deadline = { at, temp: nx.desired.temp };
+  console.log(new Date().toISOString(), `${room.name}: pre-heating to ${nx.desired.temp}° for ${new Date(at).toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' })} ` +
+    `(room ${t}°, ${rate.toFixed(1)}°/h → ${leadH.toFixed(1)} h early)`);
+  return { ...nx.desired, reason: 'preheat' };
 }
 
 // What the schedule wants for a room right now: {hvac, temp, reason} or null (schedule off).
@@ -317,9 +350,38 @@ function command(room) {
   if (r.running == null) r.running = cool ? t > target : t < target;
   else if (!r.running && wantOn && canSwitch) r.running = true;
   else if (r.running && wantOff && canSwitch) r.running = false;
+  learnRate(r, t, target);
+  if (r.deadline && (r.target < r.deadline.temp || t >= r.deadline.temp - 0.5 || Date.now() > r.deadline.at + 4 * 3600e3)) r.deadline = null;
   if (!r.running) { r.stage = null; return idleCmd(cool); }
   if (cool) return { hvac: 'cool', temp: Math.max(64, r.target - BOOST) };
+  // backstop: a pre-heat that's still 2°+ short when its block starts goes straight to the target (strips allowed)
+  if (r.deadline && Date.now() >= r.deadline.at && t < r.deadline.temp - 2 && !r.helping) {
+    if (!r.late) { r.late = true; console.log(new Date().toISOString(), `${room.name}: pre-heat ran late (room ${t}°), going straight to ${target}°`); }
+    return { hvac: 'heat', temp: Math.min(80, target + BOOST) };
+  }
+  r.late = false;
   return { hvac: 'heat', temp: GENTLE && (!r.manual || r.helping) ? stagedHeat(r, t, target) : Math.min(80, target + BOOST) };
+}
+// Is this warm-up too slow? With a pre-heat deadline ahead: only if it won't make it in time at the current
+// rate. Otherwise: slower than SLOW_RATE °F/hour (or not warming at all).
+function behind(r, t, target, rateNow) {
+  const now = Date.now();
+  if (r.deadline && r.deadline.at > now) return (target - t) / Math.max(rateNow, 0.1) > (r.deadline.at - now) / 3600e3;
+  return rateNow < SLOW_RATE;
+}
+// Learn each room's warm-up rate (°F/hour) from gentle warm-ups of 30+ minutes; used to time pre-heats.
+function learnRate(r, t, target) {
+  const now = Date.now();
+  const warming = r.running && r.hvac === 'heat' && !r.manual && !r.helping && target - t >= 1;
+  if (warming) { if (!r.warm) r.warm = { t0: t, at0: now }; return; }
+  if (!r.warm) return;
+  const h = (now - r.warm.at0) / 3600e3;
+  if (h >= 0.5 && t > r.warm.t0) {
+    const rate = Math.max(0.5, Math.min(8, (t - r.warm.t0) / h));
+    r.rate = r.rate ? 0.7 * r.rate + 0.3 * rate : rate;
+    console.log(new Date().toISOString(), `warm-up: ${(t - r.warm.t0).toFixed(1)}° in ${h.toFixed(1)} h = ${rate.toFixed(1)}°/h (learned ${r.rate.toFixed(1)}°/h)`);
+  }
+  r.warm = null;
 }
 // Heat setpoint for a running unit: the target (+BOOST), but never more than MAX_GAP above where the unit's own
 // sensor probably reads. Steps up at most every STEP_MS; if the room hasn't warmed in two steps' time (the unit
@@ -334,7 +396,7 @@ function stagedHeat(r, t, target = r.target) {
   else if (st.temp > x + 0.5 && t < st.room - 0.3) s = Math.floor(x);   // room cooled: gap got too big, come down now
   else if (now - st.at < STEP_MS) s = st.temp;
   else if (Math.floor(x) > st.temp) s = Math.floor(x);
-  else if (now - st.at >= 2 * STEP_MS && t <= st.room + 0.2) s = st.temp + 1;
+  else if (now - st.at >= 2 * STEP_MS && behind(r, t, target, (t - st.room) / ((now - st.at) / 3600e3))) s = st.temp + 1; // too slow: push up
   else s = st.temp;
   s = Math.max(61, Math.min(want, s));
   if (!st || s !== st.temp) r.stage = { temp: s, at: now, room: t };
@@ -369,7 +431,7 @@ async function tick() {
     updateHelp();
     for (const room of config.rooms) {
       const r = roomRt(room);
-      const d = desiredFor(room, new Date(), home);
+      const d = withPreheat(room, r, desiredFor(room, new Date(), home), home);
       // the schedule takes over whenever its value changes; manual settings hold until then
       if (r.schedKey !== key(d)) {
         r.schedKey = key(d);
@@ -398,8 +460,10 @@ async function disableOldAutomation() {
 function roomView(room, home) {
   const c = states[room.climate];
   const hum = findHumidity(room);
-  const desired = desiredFor(room, new Date(), home);
   const r = roomRt(room);
+  let desired = desiredFor(room, new Date(), home);
+  const preheating = !!(r.preheatFor && r.preheatFor > Date.now() && desired);
+  if (preheating) { const nx = nextChange(room, home); if (nx && nx.desired) desired = { ...nx.desired, reason: 'preheat' }; }
   return {
     ...room,
     humiditySensorUsed: hum,
@@ -409,12 +473,14 @@ function roomView(room, home) {
       target: r.hvac === 'off' ? r.target ?? null : r.target,
       running: r.hvac === 'off' ? false : r.running ?? null, // null: the unit's own thermostat decides
       helping: r.hvac !== 'off' && !!r.helping,  // sleep hours: heating the house for the quiet room
+      preheatFor: r.preheatFor ? new Date(r.preheatFor).toISOString() : null,
+      warmupRate: r.rate ? Math.round(r.rate * 10) / 10 : null,
       unit: c ? { hvac: c.state, target: c.attributes.temperature ?? null } : null,
       temp: num(states[room.tempSensor]) ?? (c ? c.attributes.current_temperature ?? null : null),
       humidity: num(states[hum]),
     },
     scheduled: desired,
-    next: desired ? nextChange(room, home) : null,
+    next: desired && !preheating ? nextChange(room, home) : null,
   };
 }
 const CONDITIONS = { 'clear-night': 'Clear', cloudy: 'Cloudy', exceptional: 'Unusual', fog: 'Fog', hail: 'Hail',
@@ -436,7 +502,7 @@ function outdoorView() {
 function stateView() {
   const home = homeState();
   return { ok: !haError, error: haError, lastPoll, home, outdoor: outdoorView(), scheduleEnabled: config.scheduleEnabled,
-           mode: config.mode, away: config.away, sensorControl: config.sensorControl, sleep: config.sleep,
+           mode: config.mode, away: config.away, sensorControl: config.sensorControl, sleep: config.sleep, preheat: config.preheat,
            sleepHelp: !!rt._help, rooms: config.rooms.map((r) => roomView(r, home)) };
 }
 function send(res, code, obj) {

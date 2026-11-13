@@ -186,6 +186,12 @@ table.tbl{width:100%;border-collapse:collapse;font-size:14px}
         <input type="number" id="g-sleep-max" min="61" max="80"> °<span class="muted">)</span>
       </div>
       <div class="row muted" id="g-sleep-note"></div>
+      <div class="row">
+        <label class="sw"><input type="checkbox" id="g-preheat"> Pre-heat</label>
+        <span class="muted">Start warming early so rooms reach the scheduled temperature on time, up to</span>
+        <input type="number" id="g-preheat-max" min="0.5" max="8" step="0.5"> <span class="muted">hours early</span>
+      </div>
+      <div class="row muted" id="g-preheat-note"></div>
     </div>
     <div id="room-edits"></div>
     <div class="savebar" id="savebar">
@@ -248,7 +254,7 @@ function render() {
   $('#conn .dot').className = 'dot ' + (state.ok ? 'ok' : 'bad');
   showErr(state.ok ? '' : 'Home Assistant error: ' + state.error);
   renderRooms();
-  if (!dirty) { draft = JSON.parse(JSON.stringify({ scheduleEnabled: state.scheduleEnabled, mode: state.mode, away: state.away, sensorControl: state.sensorControl || { enabled: true, buffer: 3 }, sleep: state.sleep, rooms: state.rooms.map(stripRoom) })); renderSchedule(); }
+  if (!dirty) { draft = JSON.parse(JSON.stringify({ scheduleEnabled: state.scheduleEnabled, mode: state.mode, away: state.away, sensorControl: state.sensorControl || { enabled: true, buffer: 3 }, sleep: state.sleep, preheat: state.preheat, rooms: state.rooms.map(stripRoom) })); renderSchedule(); }
 }
 function weatherIcon(c) {
   c = (c || '').toLowerCase();
@@ -267,6 +273,7 @@ function statusText(c, tgt) {
   const cool = c.hvac === 'cool';
   if (c.running === false) return `Idle · ${tgt}°`;
   // warming up gently: the unit is held a few degrees below the target so it stays on its heat pump
+  if (c.preheatFor && c.running !== false) return `Pre-heating for ${fmtTime(c.preheatFor)}${c.unit && c.unit.hvac === 'heat' && c.unit.target != null && c.unit.target < tgt ? ' · step ' + c.unit.target + '°' : ''}`;
   if (c.helping) return c.running ? `Heating the house${c.unit && c.unit.hvac === 'heat' && c.unit.target != null ? ' · step ' + c.unit.target + '°' : ''}` : 'Sleep hours · idle';
   if (!cool && c.running && c.unit && c.unit.hvac === 'heat' && c.unit.target != null && c.unit.target < tgt) return `Heating to ${tgt}° · step ${c.unit.target}°`;
   return (cool ? 'Cooling to ' : 'Heating to ') + tgt + '°';
@@ -286,7 +293,7 @@ function renderRooms() {
     if (r.scheduled) {
       const manual = (r.scheduled.hvac === 'off') !== isOff || (!isOff && c.target != null && r.scheduled.temp !== c.target);
       const nx = r.next ? ` → <b>${desc(r.next.desired)}</b> at ${fmtTime(r.next.at)}` : '';
-      sched = `<span class="sched">Schedule: <b>${desc(r.scheduled)}</b>${r.scheduled.reason === 'away' ? ' (away)' : r.scheduled.reason === 'sleep' ? ' (sleep hours)' : ''}${nx}</span>`
+      sched = `<span class="sched">Schedule: <b>${desc(r.scheduled)}</b>${r.scheduled.reason === 'away' ? ' (away)' : r.scheduled.reason === 'sleep' ? ' (sleep hours)' : r.scheduled.reason === 'preheat' ? ' (pre-heating)' : ''}${nx}</span>`
         + (manual ? `<div class="sched override">Manual setting — schedule takes over ${r.next ? 'at ' + fmtTime(r.next.at) : 'at the next change'}</div>` : '');
     }
     const mode = isOff ? 'off' : (c.hvac === 'cool' ? 'cool' : 'heat');
@@ -337,6 +344,7 @@ function renderSchedule() {
   $('#g-sensor').checked = draft.sensorControl.enabled;
   $('#g-buffer').value = draft.sensorControl.buffer;
   sleepForm();
+  preheatForm();
   sensorNote();
   $('#g-mode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === draft.mode));
   const box = $('#room-edits'); box.innerHTML = '';
@@ -406,6 +414,16 @@ function sleepForm() {
     : !draft.sensorControl.enabled ? 'Needs "Use room sensors" on.'
     : `From ${fmtClock(sl.start)} to ${fmtClock(sl.end)} the ${q ? q.name.toLowerCase() : ''} unit stays off. When the ${q ? q.name.toLowerCase() : ''} drops to ${sl.keepAt - half}°, the ${h ? h.name.toLowerCase() : ''} unit heats (up to ${sl.helperMax}° in the ${h ? h.name.toLowerCase() : ''}) until the ${q ? q.name.toLowerCase() : ''} is back to ${sl.keepAt + half}°. Leave the door open.`;
 }
+function preheatForm() {
+  const ph = draft.preheat || { enabled: true, maxHours: 4 }; draft.preheat = ph;
+  $('#g-preheat').checked = ph.enabled; $('#g-preheat-max').value = ph.maxHours;
+  const rates = state.rooms.filter((r) => r.current.warmupRate).map((r) => `${r.name} ${r.current.warmupRate}°/h`);
+  $('#g-preheat-note').textContent = !ph.enabled ? 'Off: warm-ups start at the scheduled time.'
+    : 'Each room learns how fast it warms up' + (rates.length ? ` (so far: ${rates.join(', ')})` : ' (starting from 1.5°/hour until it has data)') +
+      '. If a room is still 2° short when its block starts, it goes straight to the target, even if that means the backup heat.';
+}
+$('#g-preheat').onchange = (e) => { draft.preheat.enabled = e.target.checked; preheatForm(); markDirty(); };
+$('#g-preheat-max').onchange = (e) => { draft.preheat.maxHours = Math.max(0.5, Math.min(8, Math.round((Number(e.target.value) || 4) * 2) / 2)); preheatForm(); markDirty(); };
 const fmtClock = (t) => new Date('2000-01-01T' + t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 $('#g-sleep').onchange = (e) => { draft.sleep.enabled = e.target.checked; sleepForm(); markDirty(); };
 $('#g-sleep-start').onchange = (e) => { if (e.target.value) draft.sleep.start = e.target.value; sleepForm(); markDirty(); };

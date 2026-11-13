@@ -67,3 +67,16 @@ and the helper room's unit (Living Room) heats the house whenever the quiet room
 keep-at − buffer/2 (60° − 1.5°), until it's back to keep-at + buffer/2. While helping, the helper room heats
 toward its own limit (68°) with the gentle warm-up. Needs "Use room sensors" on and the bedroom door open.
 A manual change to the quiet room during sleep hours still works and holds until the schedule's next change.
+
+## Pre-heat (default on, Schedule → General)
+
+Nov 13 at 40° outside the office warmed only ~1.3–2.3°/hour with the gentle warm-up, so starting at the
+block time left it well short of 70° for hours. Now:
+- **Pre-heat:** when the next scheduled change raises a room's heat, it starts early by
+  (block temp − room temp) ÷ the room's learned warm-up rate + 15 min, at most `maxHours` (4) early.
+  Rates are learned from each gentle warm-up of 30+ minutes (starts at `DEFAULT_WARMUP_RATE`, 1.5°/h).
+- **Behind schedule → push:** during a pre-heat, the setpoint goes up 1° every 10 min only when the room
+  won't make the block start at its current rate; without a deadline, when it's warming slower than
+  `SLOW_WARMUP_RATE` (1.5°/h). (Before, it only pushed when the room wasn't warming at all, so it stalled.)
+- **Backstop:** if a pre-heated room is still 2°+ short when its block starts, it goes straight to the
+  target (+1°), accepting the electric strips.
