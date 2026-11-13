@@ -48,6 +48,9 @@ const DEFAULT_CONFIG = {
   mode: 'heat',
   away: { enabled: true, temp: 61 },
   sensorControl: { enabled: true, buffer: 3 },
+  // Sleep hours: the quiet room's unit stays off; the helper rooms' units heat the house whenever the quiet
+  // room's sensor drops below keepAt (helper rooms themselves go no higher than helperMax).
+  sleep: { enabled: true, start: '23:00', end: '09:00', days: ALL_DAYS, quietRoom: 'bedroom', helpers: ['living'], keepAt: 60, helperMax: 68 },
   rooms: [
     { id: 'office', name: 'Office', climate: 'climate.office_heat',
       tempSensor: 'sensor.office_temperature_calibrated', humiditySensor: '',
@@ -88,7 +91,19 @@ function validate(c) {
       enabled: !c.sensorControl || c.sensorControl.enabled !== false,
       buffer: Math.max(1, Math.min(8, Math.round(Number((c.sensorControl && c.sensorControl.buffer) || 3) * 2) / 2)),
     },
+    sleep: null,
     rooms: [],
+  };
+  const sl = c.sleep || DEFAULT_CONFIG.sleep;
+  const roomIds = c.rooms.map((r) => r && r.id);
+  if (!isTime(sl.start) || !isTime(sl.end) || sl.start === sl.end) throw new Error('bad sleep hours');
+  out.sleep = {
+    enabled: !!sl.enabled, start: sl.start, end: sl.end,
+    days: [...new Set((sl.days || ALL_DAYS).map(Number).filter((d) => d >= 0 && d <= 6))].sort(),
+    quietRoom: roomIds.includes(sl.quietRoom) ? sl.quietRoom : null,
+    helpers: (sl.helpers || []).filter((id) => roomIds.includes(id) && id !== sl.quietRoom),
+    keepAt: Math.max(50, Math.min(75, Math.round(Number(sl.keepAt) || 60))),
+    helperMax: clampTemp(sl.helperMax || 68),
   };
   for (const r of c.rooms) {
     if (!r || typeof r.id !== 'string' || typeof r.climate !== 'string') throw new Error('bad room');
@@ -127,10 +142,32 @@ function blockActive(b, { day, min }) {
   return (b.days.includes(day) && min >= s) || (b.days.includes((day + 6) % 7) && min < e);
 }
 
+const sleepActive = (parts) => blockActive({ ...config.sleep, enabled: true }, parts);
+// During sleep hours, should the helper rooms heat the house for the quiet room? (hysteresis on its sensor)
+function updateHelp() {
+  const sl = config.sleep, prev = !!rt._help;
+  let on = false;
+  if (sl.enabled && sl.quietRoom && sl.helpers.length && config.scheduleEnabled && config.mode === 'heat' &&
+      config.sensorControl.enabled && sleepActive(localParts(new Date()))) {
+    const q = config.rooms.find((r) => r.id === sl.quietRoom);
+    const b = q && num(states[q.tempSensor]);
+    const half = config.sensorControl.buffer / 2;
+    if (b != null) on = prev ? b < sl.keepAt + half : b <= sl.keepAt - half;
+  }
+  if (on !== prev) {
+    rt._help = on;
+    for (const id of sl.helpers) if (rt[id]) { rt[id].running = null; rt[id].stage = null; }
+    console.log(new Date().toISOString(), on ? `Sleep hours: ${sl.quietRoom} below ${sl.keepAt}°, ${sl.helpers.join(', ')} heating the house`
+                                             : `Sleep hours: ${sl.quietRoom} warm enough, helpers back to their own settings`);
+    saveRuntime();
+  }
+}
+
 // What the schedule wants for a room right now: {hvac, temp, reason} or null (schedule off).
 function desiredFor(room, at, home) {
   if (!config.scheduleEnabled || !room.scheduleEnabled) return null;
   const parts = localParts(at);
+  if (config.sleep.enabled && config.sleep.quietRoom === room.id && sleepActive(parts)) return { hvac: 'off', temp: null, reason: 'sleep' };
   const active = room.blocks.filter((b) => blockActive(b, parts));
   if (active.length) {
     const temps = active.map((b) => b.temp);
@@ -262,6 +299,7 @@ function setSetting(room, hvac, target, source = 'schedule') {
 // What to send the unit now, given the setting and the room sensor.
 function command(room) {
   const r = roomRt(room);
+  r.helping = false;
   if (r.hvac === 'off' || r.target == null) { r.running = false; return { hvac: 'off' }; }
   const t = num(states[room.tempSensor]);
   if (!config.sensorControl.enabled || t == null) {
@@ -270,21 +308,24 @@ function command(room) {
   }
   const half = config.sensorControl.buffer / 2;
   const cool = r.hvac === 'cool';
-  const wantOn = cool ? t >= r.target + half : t <= r.target - half;
-  const wantOff = cool ? t <= r.target - half : t >= r.target + half;
+  // sleep hours: a helper room heats toward helperMax while the quiet room needs warmth
+  r.helping = !cool && !!rt._help && config.sleep.helpers.includes(room.id);
+  const target = r.helping ? Math.max(r.target, config.sleep.helperMax) : r.target;
+  const wantOn = cool ? t >= target + half : t <= target - half;
+  const wantOff = cool ? t <= target - half : t >= target + half;
   const canSwitch = !r.lastSwitch || Date.now() - r.lastSwitch >= MIN_SWITCH_MS;
-  if (r.running == null) r.running = cool ? t > r.target : t < r.target;
+  if (r.running == null) r.running = cool ? t > target : t < target;
   else if (!r.running && wantOn && canSwitch) r.running = true;
   else if (r.running && wantOff && canSwitch) r.running = false;
   if (!r.running) { r.stage = null; return idleCmd(cool); }
   if (cool) return { hvac: 'cool', temp: Math.max(64, r.target - BOOST) };
-  return { hvac: 'heat', temp: GENTLE && !r.manual ? stagedHeat(r, t) : Math.min(80, r.target + BOOST) };
+  return { hvac: 'heat', temp: GENTLE && (!r.manual || r.helping) ? stagedHeat(r, t, target) : Math.min(80, target + BOOST) };
 }
 // Heat setpoint for a running unit: the target (+BOOST), but never more than MAX_GAP above where the unit's own
 // sensor probably reads. Steps up at most every STEP_MS; if the room hasn't warmed in two steps' time (the unit
 // isn't running because its sensor reads higher than estimated), it goes up 1° anyway.
-function stagedHeat(r, t) {
-  const want = Math.min(80, r.target + BOOST);
+function stagedHeat(r, t, target = r.target) {
+  const want = Math.min(80, target + BOOST);
   const x = t - UNIT_OFFSET + MAX_GAP;            // highest setpoint that keeps the gap under the strip threshold
   const st = r.stage;
   const now = Date.now();
@@ -311,6 +352,7 @@ async function controlRoom(room) {
   saveRuntime();
   const t = num(states[room.tempSensor]);
   console.log(new Date().toISOString(), `${room.name}: ${r.hvac} ${r.target ?? ''} -> unit ${cmd.hvac} ${cmd.temp ?? ''}` +
+    (r.helping ? ' [sleep hours: heating for ' + config.sleep.quietRoom + ']' : '') +
     (r.stage && cmd.hvac === 'heat' && cmd.temp < Math.min(80, r.target + BOOST) ? ' [warming up gently]' : '') +
     (t != null ? ` (room ${t}°)` : ''));
   return true;
@@ -324,6 +366,7 @@ async function tick() {
     if (haError) return;
     await lookupAreaHumidity();
     const home = homeState();
+    updateHelp();
     for (const room of config.rooms) {
       const r = roomRt(room);
       const d = desiredFor(room, new Date(), home);
@@ -365,6 +408,7 @@ function roomView(room, home) {
       hvac: r.hvac,                       // the thermostat setting
       target: r.hvac === 'off' ? r.target ?? null : r.target,
       running: r.hvac === 'off' ? false : r.running ?? null, // null: the unit's own thermostat decides
+      helping: r.hvac !== 'off' && !!r.helping,  // sleep hours: heating the house for the quiet room
       unit: c ? { hvac: c.state, target: c.attributes.temperature ?? null } : null,
       temp: num(states[room.tempSensor]) ?? (c ? c.attributes.current_temperature ?? null : null),
       humidity: num(states[hum]),
@@ -392,7 +436,8 @@ function outdoorView() {
 function stateView() {
   const home = homeState();
   return { ok: !haError, error: haError, lastPoll, home, outdoor: outdoorView(), scheduleEnabled: config.scheduleEnabled,
-           mode: config.mode, away: config.away, sensorControl: config.sensorControl, rooms: config.rooms.map((r) => roomView(r, home)) };
+           mode: config.mode, away: config.away, sensorControl: config.sensorControl, sleep: config.sleep,
+           sleepHelp: !!rt._help, rooms: config.rooms.map((r) => roomView(r, home)) };
 }
 function send(res, code, obj) {
   res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });

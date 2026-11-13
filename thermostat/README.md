@@ -59,3 +59,11 @@ unit falls back to its own thermostat at the set temperature. Runtime state is k
   end-date sensor if present, else start + 29 days.
 - **Heating hours** per room are logged by the scheduler in `data/runtime-log.json` (120 days kept).
 - `/api/power` returns all of it as JSON (cached 10 minutes).
+
+## Sleep hours
+
+Schedule → General → **Sleep hours** (default on, 11 PM–9 AM): the quiet room's unit (Bedroom) stays off,
+and the helper room's unit (Living Room) heats the house whenever the quiet room's sensor drops to
+keep-at − buffer/2 (60° − 1.5°), until it's back to keep-at + buffer/2. While helping, the helper room heats
+toward its own limit (68°) with the gentle warm-up. Needs "Use room sensors" on and the bedroom door open.
+A manual change to the quiet room during sleep hours still works and holds until the schedule's next change.

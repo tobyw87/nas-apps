@@ -171,6 +171,21 @@ table.tbl{width:100%;border-collapse:collapse;font-size:14px}
         <input type="number" id="g-buffer" min="1" max="8" step="0.5"> °
       </div>
       <div class="row muted" id="g-sensor-note"></div>
+      <div class="row">
+        <label class="sw"><input type="checkbox" id="g-sleep"> Sleep hours</label>
+        <input type="time" id="g-sleep-start"> to <input type="time" id="g-sleep-end">
+      </div>
+      <div class="row">
+        <span class="muted">Keep the</span>
+        <select id="g-sleep-quiet"></select>
+        <span class="muted">unit off, and heat with the</span>
+        <select id="g-sleep-helper"></select>
+        <span class="muted">unit when it drops below</span>
+        <input type="number" id="g-sleep-keep" min="50" max="75"> °
+        <span class="muted">(that room up to</span>
+        <input type="number" id="g-sleep-max" min="61" max="80"> °<span class="muted">)</span>
+      </div>
+      <div class="row muted" id="g-sleep-note"></div>
     </div>
     <div id="room-edits"></div>
     <div class="savebar" id="savebar">
@@ -233,7 +248,7 @@ function render() {
   $('#conn .dot').className = 'dot ' + (state.ok ? 'ok' : 'bad');
   showErr(state.ok ? '' : 'Home Assistant error: ' + state.error);
   renderRooms();
-  if (!dirty) { draft = JSON.parse(JSON.stringify({ scheduleEnabled: state.scheduleEnabled, mode: state.mode, away: state.away, sensorControl: state.sensorControl || { enabled: true, buffer: 3 }, rooms: state.rooms.map(stripRoom) })); renderSchedule(); }
+  if (!dirty) { draft = JSON.parse(JSON.stringify({ scheduleEnabled: state.scheduleEnabled, mode: state.mode, away: state.away, sensorControl: state.sensorControl || { enabled: true, buffer: 3 }, sleep: state.sleep, rooms: state.rooms.map(stripRoom) })); renderSchedule(); }
 }
 function weatherIcon(c) {
   c = (c || '').toLowerCase();
@@ -252,6 +267,7 @@ function statusText(c, tgt) {
   const cool = c.hvac === 'cool';
   if (c.running === false) return `Idle · ${tgt}°`;
   // warming up gently: the unit is held a few degrees below the target so it stays on its heat pump
+  if (c.helping) return c.running ? `Heating the house${c.unit && c.unit.hvac === 'heat' && c.unit.target != null ? ' · step ' + c.unit.target + '°' : ''}` : 'Sleep hours · idle';
   if (!cool && c.running && c.unit && c.unit.hvac === 'heat' && c.unit.target != null && c.unit.target < tgt) return `Heating to ${tgt}° · step ${c.unit.target}°`;
   return (cool ? 'Cooling to ' : 'Heating to ') + tgt + '°';
 }
@@ -270,7 +286,7 @@ function renderRooms() {
     if (r.scheduled) {
       const manual = (r.scheduled.hvac === 'off') !== isOff || (!isOff && c.target != null && r.scheduled.temp !== c.target);
       const nx = r.next ? ` → <b>${desc(r.next.desired)}</b> at ${fmtTime(r.next.at)}` : '';
-      sched = `<span class="sched">Schedule: <b>${desc(r.scheduled)}</b>${r.scheduled.reason === 'away' ? ' (away)' : ''}${nx}</span>`
+      sched = `<span class="sched">Schedule: <b>${desc(r.scheduled)}</b>${r.scheduled.reason === 'away' ? ' (away)' : r.scheduled.reason === 'sleep' ? ' (sleep hours)' : ''}${nx}</span>`
         + (manual ? `<div class="sched override">Manual setting — schedule takes over ${r.next ? 'at ' + fmtTime(r.next.at) : 'at the next change'}</div>` : '');
     }
     const mode = isOff ? 'off' : (c.hvac === 'cool' ? 'cool' : 'heat');
@@ -320,6 +336,7 @@ function renderSchedule() {
   $('#g-away-temp').value = draft.away.temp;
   $('#g-sensor').checked = draft.sensorControl.enabled;
   $('#g-buffer').value = draft.sensorControl.buffer;
+  sleepForm();
   sensorNote();
   $('#g-mode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === draft.mode));
   const box = $('#room-edits'); box.innerHTML = '';
@@ -371,9 +388,32 @@ function renderSchedule() {
 }
 $('#g-enabled').onchange = (e) => { draft.scheduleEnabled = e.target.checked; markDirty(); };
 $('#g-away').onchange = (e) => { draft.away.enabled = e.target.checked; markDirty(); };
-$('#g-sensor').onchange = (e) => { draft.sensorControl.enabled = e.target.checked; sensorNote(); markDirty(); };
+$('#g-sensor').onchange = (e) => { draft.sensorControl.enabled = e.target.checked; sensorNote(); sleepForm(); markDirty(); };
 $('#g-buffer').onchange = (e) => { draft.sensorControl.buffer = Math.max(1, Math.min(8, Number(e.target.value) || 3)); e.target.value = draft.sensorControl.buffer; sensorNote(); markDirty(); };
 $('#g-away-temp').onchange = (e) => { draft.away.temp = Number(e.target.value); markDirty(); };
+// ----- sleep hours -----
+function sleepForm() {
+  const sl = draft.sleep; if (!sl) return;
+  const opts = (sel) => draft.rooms.map((r) => `<option value="${r.id}" ${r.id === sel ? 'selected' : ''}>${r.name}</option>`).join('');
+  $('#g-sleep').checked = sl.enabled;
+  $('#g-sleep-start').value = sl.start; $('#g-sleep-end').value = sl.end;
+  $('#g-sleep-quiet').innerHTML = opts(sl.quietRoom);
+  $('#g-sleep-helper').innerHTML = draft.rooms.filter((r) => r.id !== sl.quietRoom).map((r) => `<option value="${r.id}" ${sl.helpers.includes(r.id) ? 'selected' : ''}>${r.name}</option>`).join('');
+  $('#g-sleep-keep').value = sl.keepAt; $('#g-sleep-max').value = sl.helperMax;
+  const q = draft.rooms.find((r) => r.id === sl.quietRoom), h = draft.rooms.find((r) => r.id === sl.helpers[0]);
+  const half = (draft.sensorControl.buffer || 3) / 2;
+  $('#g-sleep-note').textContent = !sl.enabled ? 'Off: every room follows its own schedule overnight.'
+    : !draft.sensorControl.enabled ? 'Needs "Use room sensors" on.'
+    : `From ${fmtClock(sl.start)} to ${fmtClock(sl.end)} the ${q ? q.name.toLowerCase() : ''} unit stays off. When the ${q ? q.name.toLowerCase() : ''} drops to ${sl.keepAt - half}°, the ${h ? h.name.toLowerCase() : ''} unit heats (up to ${sl.helperMax}° in the ${h ? h.name.toLowerCase() : ''}) until the ${q ? q.name.toLowerCase() : ''} is back to ${sl.keepAt + half}°. Leave the door open.`;
+}
+const fmtClock = (t) => new Date('2000-01-01T' + t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+$('#g-sleep').onchange = (e) => { draft.sleep.enabled = e.target.checked; sleepForm(); markDirty(); };
+$('#g-sleep-start').onchange = (e) => { if (e.target.value) draft.sleep.start = e.target.value; sleepForm(); markDirty(); };
+$('#g-sleep-end').onchange = (e) => { if (e.target.value) draft.sleep.end = e.target.value; sleepForm(); markDirty(); };
+$('#g-sleep-quiet').onchange = (e) => { draft.sleep.quietRoom = e.target.value; draft.sleep.helpers = draft.sleep.helpers.filter((id) => id !== e.target.value); if (!draft.sleep.helpers.length) draft.sleep.helpers = [draft.rooms.find((r) => r.id !== e.target.value).id]; sleepForm(); markDirty(); };
+$('#g-sleep-helper').onchange = (e) => { draft.sleep.helpers = [e.target.value]; sleepForm(); markDirty(); };
+$('#g-sleep-keep').onchange = (e) => { draft.sleep.keepAt = Math.max(50, Math.min(75, Number(e.target.value) || 60)); sleepForm(); markDirty(); };
+$('#g-sleep-max').onchange = (e) => { draft.sleep.helperMax = Math.max(61, Math.min(80, Number(e.target.value) || 68)); sleepForm(); markDirty(); };
 $('#g-mode').querySelectorAll('button').forEach((b) => b.onclick = () => { draft.mode = b.dataset.v; markDirty(); renderSchedule(); });
 $('#cancel').onclick = () => { dirty = false; $('#savebar').classList.remove('show'); render(); };
 $('#save').onclick = async () => {
