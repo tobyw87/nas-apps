@@ -41,6 +41,10 @@ const GENTLE = process.env.GENTLE_WARMUP !== 'off';
 const SLOW_RATE = envNum('SLOW_WARMUP_RATE', 1.5);
 // Pre-heat: until a room has learned its own warm-up rate, assume this (°F/hour; Nov 13 office at 40° outside: 1.3–2.3).
 const DEFAULT_RATE = envNum('DEFAULT_WARMUP_RATE', 1.5);
+// Fastest warm-up a room can count on from the heat pump (°F/hour). Faster rates were measured on the electric
+// strips; trusting them makes pre-heats start late and push onto the strips again (office, Nov 13-16).
+const MAX_RATE = envNum('MAX_WARMUP_RATE', 2);
+const rateFor = (r) => Math.min(MAX_RATE, r.rate || DEFAULT_RATE);
 // Setpoints whose IR code the units misread (69°F came out as 68°F); stepped past downward when heating.
 const SKIP_TEMPS = (process.env.SKIP_TEMPS ?? '69').split(',').map(Number).filter(Number.isFinite);
 const PUBLIC = path.join(__dirname, 'public');
@@ -186,7 +190,7 @@ function withPreheat(room, r, d, home) {
   if (r.preheatFor === at) return { ...nx.desired, reason: 'preheat' };
   const t = num(states[room.tempSensor]);
   if (t == null) return d;
-  const rate = r.rate || DEFAULT_RATE;
+  const rate = rateFor(r);
   const leadH = Math.min(config.preheat.maxHours, Math.max(0, nx.desired.temp - t) / rate + 0.25);
   if (at - now > leadH * 3600e3) return d;
   r.preheatFor = at;
@@ -356,11 +360,14 @@ function command(room) {
   if (cool) return { hvac: 'cool', temp: Math.max(64, r.target - BOOST) };
   // backstop: a pre-heat that's still 2°+ short when its block starts goes straight to the target (strips allowed)
   if (r.deadline && Date.now() >= r.deadline.at && t < r.deadline.temp - 2 && !r.helping) {
+    if (r.warm) r.warm.strips = true;
     if (!r.late) { r.late = true; console.log(new Date().toISOString(), `${room.name}: pre-heat ran late (room ${t}°), going straight to ${target}°`); }
     return { hvac: 'heat', temp: Math.min(80, target + BOOST) };
   }
   r.late = false;
-  return { hvac: 'heat', temp: GENTLE && (!r.manual || r.helping) ? stagedHeat(r, t, target) : Math.min(80, target + BOOST) };
+  const sp = GENTLE && (!r.manual || r.helping) ? stagedHeat(r, t, target) : Math.min(80, target + BOOST);
+  if (r.warm && sp - (t - UNIT_OFFSET) > MAX_GAP + 0.5) r.warm.strips = true; // gap big enough for the strips
+  return { hvac: 'heat', temp: sp };
 }
 // Is this warm-up too slow? With a pre-heat deadline ahead: only if it won't make it in time at the current
 // rate. Otherwise: slower than SLOW_RATE °F/hour (or not warming at all).
@@ -378,8 +385,11 @@ function learnRate(r, t, target) {
   const h = (now - r.warm.at0) / 3600e3;
   if (h >= 0.5 && t > r.warm.t0) {
     const rate = Math.max(0.5, Math.min(8, (t - r.warm.t0) / h));
-    r.rate = r.rate ? 0.7 * r.rate + 0.3 * rate : rate;
-    console.log(new Date().toISOString(), `warm-up: ${(t - r.warm.t0).toFixed(1)}° in ${h.toFixed(1)} h = ${rate.toFixed(1)}°/h (learned ${r.rate.toFixed(1)}°/h)`);
+    if (r.warm.strips) console.log(new Date().toISOString(), `warm-up: ${(t - r.warm.t0).toFixed(1)}° in ${h.toFixed(1)} h = ${rate.toFixed(1)}°/h (not learned: setpoint went high enough for the strips)`);
+    else {
+      r.rate = Math.min(MAX_RATE, r.rate ? 0.7 * Math.min(MAX_RATE, r.rate) + 0.3 * rate : rate);
+      console.log(new Date().toISOString(), `warm-up: ${(t - r.warm.t0).toFixed(1)}° in ${h.toFixed(1)} h = ${rate.toFixed(1)}°/h (learned ${r.rate.toFixed(1)}°/h)`);
+    }
   }
   r.warm = null;
 }
@@ -474,7 +484,7 @@ function roomView(room, home) {
       running: r.hvac === 'off' ? false : r.running ?? null, // null: the unit's own thermostat decides
       helping: r.hvac !== 'off' && !!r.helping,  // sleep hours: heating the house for the quiet room
       preheatFor: r.preheatFor ? new Date(r.preheatFor).toISOString() : null,
-      warmupRate: r.rate ? Math.round(r.rate * 10) / 10 : null,
+      warmupRate: r.rate ? Math.round(rateFor(r) * 10) / 10 : null,
       unit: c ? { hvac: c.state, target: c.attributes.temperature ?? null } : null,
       temp: num(states[room.tempSensor]) ?? (c ? c.attributes.current_temperature ?? null : null),
       humidity: num(states[hum]),

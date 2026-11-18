@@ -80,3 +80,10 @@ block time left it well short of 70° for hours. Now:
   `SLOW_WARMUP_RATE` (1.5°/h). (Before, it only pushed when the room wasn't warming at all, so it stalled.)
 - **Backstop:** if a pre-heated room is still 2°+ short when its block starts, it goes straight to the
   target (+1°), accepting the electric strips.
+
+## Warm-up rate cap (Nov 18)
+
+The office learned 4.5°/h on Nov 13 from a warm-up that ran on the electric strips. Pre-heats then started
+only ~2 h early, fell behind and pushed onto the strips again (Mon Nov 16, 34–36° outside). Now a warm-up
+whose setpoint went past the strip threshold (unit gap > `MAX_SETPOINT_GAP` + 0.5, the late backstop, or a
+manual jump) isn't learned from, and rates are capped at `MAX_WARMUP_RATE` (2°F/h).
